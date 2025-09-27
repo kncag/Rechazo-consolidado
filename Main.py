@@ -115,7 +115,8 @@ def _validate_and_post(df: pd.DataFrame, button_key: str):
 
 # -------------- Flujos --------------
 def tab_pre_bcp_xlsx():
-    st.header("PRE BCP-xlsx")
+    # Título interno modificado
+    st.header("Antigua manera de rechazar con PDF")
     code, desc = select_code("pre_xlsx_code", "R002")
 
     pdf_file = st.file_uploader("PDF con filas", type="pdf", key="pre_xlsx_pdf")
@@ -130,11 +131,10 @@ def tab_pre_bcp_xlsx():
             df_raw = pd.read_excel(ex_file, dtype=str)
             df_temp = df_raw.iloc[filas].reset_index(drop=True)
 
-            # Construir df_out con columna M como importe (índice 12)
             df_out = pd.DataFrame({
                 "dni/cex": df_temp.iloc[:, 0],
                 "nombre": df_temp.iloc[:, 1],
-                "importe": df_temp.iloc[:, 12].apply(parse_amount),
+                "importe": df_temp.iloc[:, 12].apply(parse_amount),  # Columna M
                 "Referencia": df_temp.iloc[:, 3],
             })
             df_out["Estado"] = ESTADO
@@ -274,11 +274,10 @@ def tab_post_bcp_xlsx():
             mask = df_raw.astype(str).apply(lambda col: col.isin(docs)).any(axis=1)
             df_temp = df_raw.loc[mask].reset_index(drop=True)
 
-            # columna M como importe (índice 12)
             df_out = pd.DataFrame({
                 "dni/cex": df_temp.iloc[:, 0],
                 "nombre": df_temp.iloc[:, 1],
-                "importe": df_temp.iloc[:, 12].apply(parse_amount),
+                "importe": df_temp.iloc[:, 12].apply(parse_amount),  # Columna M
                 "Referencia": df_temp.iloc[:, 3],
             })
             df_out["Estado"] = ESTADO
@@ -301,11 +300,9 @@ def tab_post_bcp_xlsx():
             _validate_and_post(df_out, "post_post_xlsx")
 
 # -------------- Render pestañas --------------
+# Nombre de la pestaña cambiado a "-"
 tabs = st.tabs([
-    "PRE BCP-xlsx",
-    "PRE BCP-txt",
-    "rechazo IBK",
-    "POST BCP-xlsx",
+    "-", "PRE BCP-txt", "rechazo IBK", "POST BCP-xlsx",
 ])
 with tabs[0]:
     tab_pre_bcp_xlsx()
