@@ -55,6 +55,14 @@ OUT_COLS = [
     "Descripcion de Rechazo",
 ]
 
+# columnas que realmente enviará el endpoint
+SUBSET_COLS = [
+    "Referencia",
+    "Estado",
+    "Codigo de Rechazo",
+    "Descripcion de Rechazo",
+]
+
 # -------------- Utilidades --------------
 def parse_amount(raw) -> float:
     if raw is None:
@@ -110,6 +118,20 @@ def select_code(key: str, default: str) -> tuple[str, str]:
     st.write("Código de rechazo seleccionado:", f"**{code} – {desc}**")
     return code, desc
 
+def _validate_and_post(df: pd.DataFrame, button_key: str):
+    """
+    Verifica que df tenga exactamente OUT_COLS como encabezados,
+    y envía solo SUBSET_COLS al endpoint al pulsar RECH-POSTMAN.
+    """
+    if list(df.columns) != OUT_COLS:
+        st.error(f"Encabezados inválidos. Se requieren: {OUT_COLS}")
+        return
+    if st.button("RECH-POSTMAN", key=button_key):
+        to_send = df[SUBSET_COLS]
+        excel_bytes = df_to_excel_bytes(to_send)
+        status, resp = post_to_endpoint(excel_bytes)
+        st.success(f"{status}: {resp}")
+
 # -------------- Flujos --------------
 def tab_pre_bcp_xlsx():
     st.header("PRE BCP-xlsx")
@@ -117,10 +139,9 @@ def tab_pre_bcp_xlsx():
 
     pdf_file = st.file_uploader("PDF con filas", type="pdf", key="pre_xlsx_pdf")
     ex_file  = st.file_uploader("Excel masivo", type="xlsx", key="pre_xlsx_xls")
-
     if pdf_file and ex_file:
         with st.spinner("Procesando PRE BCP-xlsx..."):
-            text = "".join(page.get_text() or "" for page in fitz.open(
+            text = "".join(p.get_text() or "" for p in fitz.open(
                 stream=pdf_file.read(), filetype="pdf"
             ))
             filas = sorted({int(n) + 1 for n in re.findall(r"Registro\s+(\d+)", text)})
@@ -129,22 +150,19 @@ def tab_pre_bcp_xlsx():
             df_sel = df_raw.iloc[filas].reset_index(drop=True)
 
             st.dataframe(df_sel)
-            # resumen de importes si existe
             if "importe" in df_sel.columns:
                 total = pd.to_numeric(df_sel["importe"], errors="coerce").fillna(0.0).sum()
                 st.write(f"**Suma de importes:** {total:,.2f}")
 
-            excel_bytes = df_to_excel_bytes(df_sel)
+            eb = df_to_excel_bytes(df_sel)
             st.download_button(
                 "Descargar excel de registros",
-                excel_bytes,
+                eb,
                 file_name="pre_bcp_xlsx.xlsx",
                 mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
             )
 
-            if st.button("RECH-POSTMAN", key="post_pre_xlsx"):
-                status, resp = post_to_endpoint(df_sel.iloc[:, 3:].pipe(df_to_excel_bytes))
-                st.success(f"{status}: {resp}")
+            _validate_and_post(df_sel, "post_pre_xlsx")
 
 def tab_pre_bcp_txt():
     st.header("PRE BCP-txt")
@@ -152,10 +170,9 @@ def tab_pre_bcp_txt():
 
     pdf_file = st.file_uploader("PDF", type="pdf", key="pre_txt_pdf")
     txt_file = st.file_uploader("TXT", type="txt", key="pre_txt_txt")
-
     if pdf_file and txt_file:
         with st.spinner("Procesando PRE BCP-txt..."):
-            text = "".join(page.get_text() or "" for page in fitz.open(
+            text = "".join(p.get_text() or "" for p in fitz.open(
                 stream=pdf_file.read(), filetype="pdf"
             ))
             regs    = sorted({int(m) for m in re.findall(r"Registro\s+(\d{1,5})", text)})
@@ -173,7 +190,6 @@ def tab_pre_bcp_txt():
                 else:
                     dni = nombre = ref = ""
                     imp = 0.0
-
                 rows.append({
                     "dni/cex": dni,
                     "nombre": nombre,
@@ -187,21 +203,18 @@ def tab_pre_bcp_txt():
             df = pd.DataFrame(rows, columns=OUT_COLS)
 
             st.dataframe(df)
-            # resumen de importes
             total = df["importe"].sum()
             st.write(f"**Suma de importes:** {total:,.2f}")
 
-            excel_bytes = df_to_excel_bytes(df)
+            eb = df_to_excel_bytes(df)
             st.download_button(
                 "Descargar excel de registros",
-                excel_bytes,
+                eb,
                 file_name="pre_bcp_txt.xlsx",
                 mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
             )
 
-            if st.button("RECH-POSTMAN", key="post_pre_txt"):
-                status, resp = post_to_endpoint(df.iloc[:, 3:].pipe(df_to_excel_bytes))
-                st.success(f"{status}: {resp}")
+            _validate_and_post(df, "post_pre_txt")
 
 def tab_rechazo_ibk():
     st.header("rechazo IBK")
@@ -237,21 +250,18 @@ def tab_rechazo_ibk():
             })[OUT_COLS]
 
             st.dataframe(df_out)
-            # resumen de importes
             total = df_out["importe"].sum()
             st.write(f"**Suma de importes:** {total:,.2f}")
 
-            excel_bytes = df_to_excel_bytes(df_out)
+            eb = df_to_excel_bytes(df_out)
             st.download_button(
                 "Descargar excel de registros",
-                excel_bytes,
+                eb,
                 file_name="rechazo_ibk.xlsx",
                 mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
             )
 
-            if st.button("RECH-POSTMAN", key="post_ibk"):
-                status, resp = post_to_endpoint(df_out.iloc[:, 3:].pipe(df_to_excel_bytes))
-                st.success(f"{status}: {resp}")
+            _validate_and_post(df_out, "post_ibk")
 
 def tab_post_bcp_xlsx():
     st.header("POST BCP-xlsx")
@@ -259,10 +269,9 @@ def tab_post_bcp_xlsx():
 
     pdf_file = st.file_uploader("PDF con DNI", type="pdf", key="post_xlsx_pdf")
     ex_file  = st.file_uploader("Excel masivo", type="xlsx", key="post_xlsx_xls")
-
     if pdf_file and ex_file:
         with st.spinner("Procesando POST BCP-xlsx..."):
-            text = "".join(page.get_text() or "" for page in fitz.open(
+            text = "".join(p.get_text() or "" for p in fitz.open(
                 stream=pdf_file.read(), filetype="pdf"
             ))
             docs = set(re.findall(r"\b\d{6,}\b", text))
@@ -272,22 +281,19 @@ def tab_post_bcp_xlsx():
             df_sel = df_raw.loc[mask].reset_index(drop=True)
 
             st.dataframe(df_sel)
-            # resumen de importes si existe
             if "importe" in df_sel.columns:
                 total = pd.to_numeric(df_sel["importe"], errors="coerce").fillna(0.0).sum()
                 st.write(f"**Suma de importes:** {total:,.2f}")
 
-            excel_bytes = df_to_excel_bytes(df_sel)
+            eb = df_to_excel_bytes(df_sel)
             st.download_button(
                 "Descargar excel de registros",
-                excel_bytes,
+                eb,
                 file_name="post_bcp_xlsx.xlsx",
                 mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
             )
 
-            if st.button("RECH-POSTMAN", key="post_post_xlsx"):
-                status, resp = post_to_endpoint(df_sel.iloc[:, 3:].pipe(df_to_excel_bytes))
-                st.success(f"{status}: {resp}")
+            _validate_and_post(df_sel, "post_post_xlsx")
 
 # -------------- Render pestañas --------------
 tabs = st.tabs([
