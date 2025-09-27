@@ -81,8 +81,8 @@ def slice_fixed(line: str, start: int, end: int) -> str:
 
 def df_to_excel_bytes(df: pd.DataFrame) -> bytes:
     buf = io.BytesIO()
-    with pd.ExcelWriter(buf, engine="openpyxl") as writer:
-        df.to_excel(writer, index=False, sheet_name="Rechazos")
+    with pd.ExcelWriter(buf, engine="openpyxl") as w:
+        df.to_excel(w, index=False, sheet_name="Rechazos")
     return buf.getvalue()
 
 def post_to_endpoint(excel_bytes: bytes) -> tuple[int, str]:
@@ -113,20 +113,18 @@ def select_code(key: str, default: str) -> tuple[str, str]:
     st.write("Código de rechazo seleccionado:", f"**{code} – {desc}**")
     return code, desc
 
-# -------------- Pestañas --------------
+# -------------- Flujos --------------
 def tab_pre_bcp_xlsx():
     st.header("PRE BCP-xlsx")
     code, desc = select_code("pre_xlsx_code", "R002")
 
     pdf_file = st.file_uploader("PDF con filas", type="pdf", key="pre_xlsx_pdf")
     ex_file  = st.file_uploader("Excel masivo", type="xlsx", key="pre_xlsx_xls")
-
     if pdf_file and ex_file:
-        with st.spinner("Procesando PRE BCP-xlsx..."):
-            text = ""
-            for page in fitz.open(stream=pdf_file.read(), filetype="pdf"):
-                text += page.get_text() or ""
-
+        with st.spinner("Procesando…"):
+            text = "".join(p.get_text() or "" for p in fitz.open(
+                stream=pdf_file.read(), filetype="pdf"
+            ))
             filas = sorted({int(n) + 1 for n in re.findall(r"Registro\s+(\d+)", text)})
             df_raw = pd.read_excel(ex_file, dtype=str)
             df_sel = df_raw.iloc[filas].reset_index(drop=True)
@@ -139,6 +137,7 @@ def tab_pre_bcp_xlsx():
                 file_name="pre_bcp_xlsx.xlsx",
                 mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
             )
+
             if st.button("RECH-POSTMAN", key="post_pre_xlsx"):
                 status, resp = post_to_endpoint(df_sel.iloc[:, 3:].pipe(df_to_excel_bytes))
                 st.success(f"{status}: {resp}")
@@ -149,13 +148,11 @@ def tab_pre_bcp_txt():
 
     pdf_file = st.file_uploader("PDF", type="pdf", key="pre_txt_pdf")
     txt_file = st.file_uploader("TXT", type="txt", key="pre_txt_txt")
-
     if pdf_file and txt_file:
-        with st.spinner("Procesando PRE BCP-txt..."):
-            text = ""
-            for page in fitz.open(stream=pdf_file.read(), filetype="pdf"):
-                text += page.get_text() or ""
-
+        with st.spinner("Procesando…"):
+            text = "".join(p.get_text() or "" for p in fitz.open(
+                stream=pdf_file.read(), filetype="pdf"
+            ))
             regs    = sorted({int(m) for m in re.findall(r"Registro\s+(\d{1,5})", text)})
             lines   = txt_file.read().decode("utf-8", errors="ignore").splitlines()
             indices = sorted({r * MULT for r in regs})
@@ -190,17 +187,17 @@ def tab_pre_bcp_txt():
                 file_name="pre_bcp_txt.xlsx",
                 mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
             )
+
             if st.button("RECH-POSTMAN", key="post_pre_txt"):
                 status, resp = post_to_endpoint(df.iloc[:, 3:].pipe(df_to_excel_bytes))
                 st.success(f"{status}: {resp}")
 
 def tab_rechazo_ibk():
     st.header("rechazo IBK")
-    user_code, user_desc = select_code("ibk_code", "R002")
-
+    # Quitar selector manual: solo regla R016 vs R002
     zip_file = st.file_uploader("ZIP con Excel", type="zip", key="ibk_zip")
     if zip_file:
-        with st.spinner("Procesando rechazo IBK..."):
+        with st.spinner("Procesando rechazo IBK…"):
             buf    = io.BytesIO(zip_file.read())
             zf     = zipfile.ZipFile(buf)
             fname  = next(n for n in zf.namelist() if n.lower().endswith((".xlsx", ".xls")))
@@ -218,11 +215,11 @@ def tab_rechazo_ibk():
                 ref    = r.iloc[7]
                 imp    = parse_amount(r.iloc[13])
 
-                # Aplicar regla R016 vs R002
+                # Aplicar R016 si aparece keyword, sino R002
                 if any(k in o.lower() for k in KEYWORDS_NO_TIT):
                     code, desc = "R016", "CLIENTE NO TITULAR DE LA CUENTA"
                 else:
-                    code, desc = user_code, user_desc
+                    code, desc = "R002", "CUENTA INVALIDA"
 
                 rows.append({
                     "dni/cex": dni,
@@ -235,9 +232,7 @@ def tab_rechazo_ibk():
                 })
 
             df = pd.DataFrame(rows, columns=OUT_COLS)
-            df["importe"] = pd.to_numeric(df["importe"], errors="coerce").fillna(0.0)
             st.dataframe(df)
-
             excel_bytes = df_to_excel_bytes(df)
             st.download_button(
                 "Descargar excel de registros",
@@ -255,12 +250,11 @@ def tab_post_bcp_xlsx():
 
     pdf_file = st.file_uploader("PDF con DNI", type="pdf", key="post_xlsx_pdf")
     ex_file  = st.file_uploader("Excel masivo", type="xlsx", key="post_xlsx_xls")
-
     if pdf_file and ex_file:
-        with st.spinner("Procesando POST BCP-xlsx..."):
-            text = ""
-            for page in fitz.open(stream=pdf_file.read(), filetype="pdf"):
-                text += page.get_text() or ""
+        with st.spinner("Procesando POST BCP-xlsx…"):
+            text = "".join(p.get_text() or "" for p in fitz.open(
+                stream=pdf_file.read(), filetype="pdf"
+            ))
             docs = set(re.findall(r"\b\d{6,}\b", text))
 
             df_raw = pd.read_excel(ex_file, dtype=str)
