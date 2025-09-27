@@ -330,10 +330,8 @@ def tab_post_bcp_xlsx():
 
 # -------------- Render pestañas --------------
 tabs = st.tabs([
-    "-", "PRE BCP-txt", "rechazo IBK", "POST BCP-xlsx"
+    "PRE BCP-txt", "rechazo IBK", "POST BCP-xlsx"
 ])
-with tabs[0]:
-    tab_pre_bcp_xlsx()
 with tabs[1]:
     tab_pre_bcp_txt()
 with tabs[2]:
