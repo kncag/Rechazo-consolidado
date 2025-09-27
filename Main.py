@@ -19,15 +19,22 @@ ENDPOINT = (
     "https://q6caqnpy09.execute-api.us-east-1.amazonaws.com"
     "/OPS/kpayout/v1/payout_process/reject_invoices_batch"
 )
+
 TXT_POS = {
     "dni": (25, 33),
     "nombre": (40, 85),
     "referencia": (115, 126),
     "importe": (186, 195),
 }
+
 ESTADO = "rechazada"
 MULT = 2
-CODE_DESC = {"R001": "DOCUMENTO ERRADO", "R002": "CUENTA INVALIDA"}
+
+CODE_DESC = {
+    "R001": "DOCUMENTO ERRADO",
+    "R002": "CUENTA INVALIDA",
+}
+
 KEYWORDS_NO_TIT = [
     "no es titular",
     "beneficiario no",
@@ -37,6 +44,7 @@ KEYWORDS_NO_TIT = [
     "puedes continuar",
     "si deseas, puedes continuar",
 ]
+
 OUT_COLS = [
     "dni/cex",
     "nombre",
@@ -46,7 +54,13 @@ OUT_COLS = [
     "Codigo de Rechazo",
     "Descripcion de Rechazo",
 ]
-SUBSET_COLS = ["Referencia", "Estado", "Codigo de Rechazo", "Descripcion de Rechazo"]
+
+SUBSET_COLS = [
+    "Referencia",
+    "Estado",
+    "Codigo de Rechazo",
+    "Descripcion de Rechazo",
+]
 
 # -------------- Utilidades --------------
 def parse_amount(raw) -> float:
@@ -73,8 +87,8 @@ def slice_fixed(line: str, start: int, end: int) -> str:
 
 def df_to_excel_bytes(df: pd.DataFrame) -> bytes:
     buf = io.BytesIO()
-    with pd.ExcelWriter(buf, engine="openpyxl") as w:
-        df.to_excel(w, index=False, sheet_name="Rechazos")
+    with pd.ExcelWriter(buf, engine="openpyxl") as writer:
+        df.to_excel(writer, index=False, sheet_name="Rechazos")
     return buf.getvalue()
 
 def post_to_endpoint(excel_bytes: bytes) -> tuple[int, str]:
@@ -91,8 +105,8 @@ def post_to_endpoint(excel_bytes: bytes) -> tuple[int, str]:
 def select_code(key: str, default: str) -> tuple[str, str]:
     if key not in st.session_state:
         st.session_state[key] = default
-    c1, c2, c3 = st.columns([1, 2, 1])
-    with c2:
+    _, center, _ = st.columns([1, 2, 1])
+    with center:
         b1, b2 = st.columns(2, gap="small")
         if b1.button("R001\nDOCUMENTO ERRADO", key=f"{key}_r001"):
             st.session_state[key] = "R001"
@@ -115,7 +129,6 @@ def _validate_and_post(df: pd.DataFrame, button_key: str):
 
 # -------------- Flujos --------------
 def tab_pre_bcp_xlsx():
-    # Título interno modificado
     st.header("Antigua manera de rechazar con PDF")
     code, desc = select_code("pre_xlsx_code", "R002")
 
@@ -131,11 +144,15 @@ def tab_pre_bcp_xlsx():
             df_raw = pd.read_excel(ex_file, dtype=str)
             df_temp = df_raw.iloc[filas].reset_index(drop=True)
 
+            # extraer referencia interna (col D, índice 3) y de salida (col H, índice 7)
+            ref_int = df_temp.iloc[:, 3]
+            ref_out = df_temp.iloc[:, 7]
+
             df_out = pd.DataFrame({
                 "dni/cex": df_temp.iloc[:, 0],
                 "nombre": df_temp.iloc[:, 1],
-                "importe": df_temp.iloc[:, 12].apply(parse_amount),  # Columna M
-                "Referencia": df_temp.iloc[:, 3],
+                "importe": df_temp.iloc[:, 12].apply(parse_amount),
+                "Referencia": ref_out,
             })
             df_out["Estado"] = ESTADO
             df_out["Codigo de Rechazo"] = code
@@ -274,11 +291,15 @@ def tab_post_bcp_xlsx():
             mask = df_raw.astype(str).apply(lambda col: col.isin(docs)).any(axis=1)
             df_temp = df_raw.loc[mask].reset_index(drop=True)
 
+            # extraer referencia interna (col D) y de salida (col H)
+            ref_int = df_temp.iloc[:, 3]
+            ref_out = df_temp.iloc[:, 7]
+
             df_out = pd.DataFrame({
                 "dni/cex": df_temp.iloc[:, 0],
                 "nombre": df_temp.iloc[:, 1],
-                "importe": df_temp.iloc[:, 12].apply(parse_amount),  # Columna M
-                "Referencia": df_temp.iloc[:, 3],
+                "importe": df_temp.iloc[:, 12].apply(parse_amount),
+                "Referencia": ref_out,
             })
             df_out["Estado"] = ESTADO
             df_out["Codigo de Rechazo"] = code
@@ -300,7 +321,6 @@ def tab_post_bcp_xlsx():
             _validate_and_post(df_out, "post_post_xlsx")
 
 # -------------- Render pestañas --------------
-# Nombre de la pestaña cambiado a "-"
 tabs = st.tabs([
     "-", "PRE BCP-txt", "rechazo IBK", "POST BCP-xlsx",
 ])
