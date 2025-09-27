@@ -144,13 +144,17 @@ def tab_pre_bcp_xlsx():
             df_raw = pd.read_excel(ex_file, dtype=str)
             df_temp = df_raw.iloc[filas].reset_index(drop=True)
 
-            # extraer referencia interna (col D, índice 3) y de salida (col H, índice 7)
-            ref_int = df_temp.iloc[:, 3]
-            ref_out = df_temp.iloc[:, 7]
+            # referencias internas y de salida
+            ref_int = df_temp.iloc[:, 3]   # col D para lógica interna
+            ref_out = df_temp.iloc[:, 7]   # col H para output
+
+            # nombres internos y de salida
+            nombre_int = df_temp.iloc[:, 1]  # col B para lógica interna
+            nombre_out = df_temp.iloc[:, 3]  # col D para output
 
             df_out = pd.DataFrame({
                 "dni/cex": df_temp.iloc[:, 0],
-                "nombre": df_temp.iloc[:, 1],
+                "nombre": nombre_out,
                 "importe": df_temp.iloc[:, 12].apply(parse_amount),
                 "Referencia": ref_out,
             })
@@ -291,13 +295,17 @@ def tab_post_bcp_xlsx():
             mask = df_raw.astype(str).apply(lambda col: col.isin(docs)).any(axis=1)
             df_temp = df_raw.loc[mask].reset_index(drop=True)
 
-            # extraer referencia interna (col D) y de salida (col H)
-            ref_int = df_temp.iloc[:, 3]
-            ref_out = df_temp.iloc[:, 7]
+            # referencias internas y de salida
+            ref_int = df_temp.iloc[:, 3]   # col D para lógica interna
+            ref_out = df_temp.iloc[:, 7]   # col H para output
+
+            # nombres internos y de salida
+            nombre_int = df_temp.iloc[:, 1]  # col B para lógica interna
+            nombre_out = df_temp.iloc[:, 3]  # col D para output
 
             df_out = pd.DataFrame({
                 "dni/cex": df_temp.iloc[:, 0],
-                "nombre": df_temp.iloc[:, 1],
+                "nombre": nombre_out,
                 "importe": df_temp.iloc[:, 12].apply(parse_amount),
                 "Referencia": ref_out,
             })
