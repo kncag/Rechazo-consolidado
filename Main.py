@@ -55,7 +55,6 @@ OUT_COLS = [
     "Descripcion de Rechazo",
 ]
 
-# columnas que realmente enviará el endpoint
 SUBSET_COLS = [
     "Referencia",
     "Estado",
@@ -149,10 +148,15 @@ def tab_pre_bcp_xlsx():
             df_raw = pd.read_excel(ex_file, dtype=str)
             df_sel = df_raw.iloc[filas].reset_index(drop=True)
 
+            # asegurar encabezados OUT_COLS
+            df_sel["Estado"] = ESTADO
+            df_sel["Codigo de Rechazo"] = code
+            df_sel["Descripcion de Rechazo"] = desc
+            df_sel = df_sel[OUT_COLS]
+
             st.dataframe(df_sel)
-            if "importe" in df_sel.columns:
-                total = pd.to_numeric(df_sel["importe"], errors="coerce").fillna(0.0).sum()
-                st.write(f"**Suma de importes:** {total:,.2f}")
+            total = df_sel["importe"].sum()
+            st.write(f"**Suma de importes:** {total:,.2f}")
 
             eb = df_to_excel_bytes(df_sel)
             st.download_button(
@@ -161,7 +165,6 @@ def tab_pre_bcp_xlsx():
                 file_name="pre_bcp_xlsx.xlsx",
                 mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
             )
-
             _validate_and_post(df_sel, "post_pre_xlsx")
 
 def tab_pre_bcp_txt():
@@ -201,7 +204,6 @@ def tab_pre_bcp_txt():
                 })
 
             df = pd.DataFrame(rows, columns=OUT_COLS)
-
             st.dataframe(df)
             total = df["importe"].sum()
             st.write(f"**Suma de importes:** {total:,.2f}")
@@ -213,12 +215,10 @@ def tab_pre_bcp_txt():
                 file_name="pre_bcp_txt.xlsx",
                 mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
             )
-
             _validate_and_post(df, "post_pre_txt")
 
 def tab_rechazo_ibk():
     st.header("rechazo IBK")
-
     zip_file = st.file_uploader("ZIP con Excel", type="zip", key="ibk_zip")
     if zip_file:
         with st.spinner("Procesando rechazo IBK..."):
@@ -235,8 +235,8 @@ def tab_rechazo_ibk():
             df_out = pd.DataFrame({
                 "dni/cex":           df_valid.iloc[:, 4],
                 "nombre":            df_valid.iloc[:, 5],
-                "Referencia":        df_valid.iloc[:, 7],
                 "importe":           df_valid.iloc[:, 13].apply(parse_amount),
+                "Referencia":        df_valid.iloc[:, 7],
                 "Estado":            ESTADO,
                 "Codigo de Rechazo": [
                     "R016" if any(k in str(o).lower() for k in KEYWORDS_NO_TIT) else "R002"
@@ -258,9 +258,8 @@ def tab_rechazo_ibk():
                 "Descargar excel de registros",
                 eb,
                 file_name="rechazo_ibk.xlsx",
-                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                mime="application/vnd.openxmlformats-officedocument-spreadsheetml.sheet",
             )
-
             _validate_and_post(df_out, "post_ibk")
 
 def tab_post_bcp_xlsx():
@@ -278,12 +277,18 @@ def tab_post_bcp_xlsx():
 
             df_raw = pd.read_excel(ex_file, dtype=str)
             mask   = df_raw.astype(str).apply(lambda col: col.isin(docs)).any(axis=1)
-            df_sel = df_raw.loc[mask].reset_index(drop=True)
+            df_sel_raw = df_raw.loc[mask].reset_index(drop=True)
+
+            # asegurar encabezados OUT_COLS
+            df_sel = df_sel_raw.copy()
+            df_sel["Estado"] = ESTADO
+            df_sel["Codigo de Rechazo"] = code
+            df_sel["Descripcion de Rechazo"] = desc
+            df_sel = df_sel[OUT_COLS]
 
             st.dataframe(df_sel)
-            if "importe" in df_sel.columns:
-                total = pd.to_numeric(df_sel["importe"], errors="coerce").fillna(0.0).sum()
-                st.write(f"**Suma de importes:** {total:,.2f}")
+            total = df_sel["importe"].sum()
+            st.write(f"**Suma de importes:** {total:,.2f}")
 
             eb = df_to_excel_bytes(df_sel)
             st.download_button(
@@ -292,7 +297,6 @@ def tab_post_bcp_xlsx():
                 file_name="post_bcp_xlsx.xlsx",
                 mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
             )
-
             _validate_and_post(df_sel, "post_post_xlsx")
 
 # -------------- Render pestañas --------------
