@@ -294,7 +294,7 @@ def tab_pre_bcp_txt():
                 "Descargar excel de registros",
                 eb,
                 file_name="pre_bcp_txt.xlsx",
-                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                mime="application/vnd.openxmlformats-officedocument-spreadsheetml.sheet",
             )
 
             _validate_and_post(df_out, "post_pre_txt")
@@ -346,7 +346,7 @@ def tab_rechazo_ibk():
                 "Descargar excel de registros",
                 eb,
                 file_name="rechazo_ibk.xlsx",
-                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                mime="application/vnd.openxmlformats-officedocument-spreadsheetml.sheet",
             )
 
             _validate_and_post(df_out, "post_ibk")
@@ -401,7 +401,7 @@ def tab_post_bcp_xlsx():
             _validate_and_post(df_out, "post_post_xlsx")
 
 def tab_rechazo_bbva_xlsx():
-    # Mismo filtrado que POST BCP-xlsx, nombre de flujo "Rechazo BBVA", y mapeo por keywords BBVA
+    # Mismo filtrado que POST BCP-xlsx, nombre de flujo "Rechazo BBVA", limpieza de encabezados y mapeo por keywords BBVA
     st.header("Rechazo BBVA")
     code_ui, desc_ui = select_code("pre_bbva_code", "R002")
 
@@ -422,45 +422,38 @@ def tab_rechazo_bbva_xlsx():
                 st.error("No se detectaron identificadores en el PDF. Adjunte un PDF válido.")
                 return
 
-            # buscar columna 'situacion' en el DataFrame filtrado
-           # obtener columna 'situacion' si existe
-situ_col = _find_situacion_column_in_df(df_temp)
-if situ_col:
-    # leer y limpiar espacios
-    situaciones_raw = df_temp[situ_col].astype(str).fillna("").tolist()
-    situaciones = [s.strip() for s in situaciones_raw]
-
-    # eliminar entradas que sean solo el encabezado o variantes (puede ocurrir si la tabla se pegó con header en fila)
-    encabezado_variantes = {"SITUACION", "SITUACIÓN", "SITUACI0N", "SITUACION:"}
-    situaciones = [s for s in situaciones if s.upper().replace(" ", "").replace(":", "") not in {v.replace(" ", "").replace(":", "") for v in encabezado_variantes}]
-
-    # si tras eliminar encabezados hay menos valores que filas, rellenamos con vacíos
-    if len(situaciones) < len(df_temp):
-        situaciones += [""] * (len(df_temp) - len(situaciones))
-    # si hay más (por ejemplo, extracción duplicada), cortamos a la longitud necesaria
-    situaciones = situaciones[: len(df_temp)]
-else:
-    # fallback previo: extraer líneas del PDF que contengan 'Situación' y procesarlas igual
-    situ_lines = _extract_situaciones_from_pdf(io.BytesIO(pdf_bytes))
-    situaciones = []
-    for ln in situ_lines:
-        parts = re.split(r":", ln, maxsplit=1)
-        val = parts[1].strip() if len(parts) > 1 else ln.strip()
-        # ignorar si es solo la palabra 'Situación'
-        if val.upper().replace(" ", "") in {"SITUACION", "SITUACIÓN"}:
-            continue
-        situaciones.append(val)
-    if not situaciones:
-        situaciones = [""] * len(df_temp)
-    else:
-        if len(situaciones) < len(df_temp):
-            situaciones += [""] * (len(df_temp) - len(situaciones))
-        situaciones = situaciones[: len(df_temp)]
-
-            # asegurar longitud 1:1
-            if len(situaciones) < len(df_temp):
-                situaciones += [""] * (len(df_temp) - len(situaciones))
-            situaciones = situaciones[: len(df_temp)]
+            # buscar columna 'situacion' en el DataFrame filtrado y limpiar posibles headers arrastrados
+            situ_col = _find_situacion_column_in_df(df_temp)
+            situaciones = []
+            if situ_col:
+                situaciones_raw = df_temp[situ_col].astype(str).fillna("").tolist()
+                # limpieza básica y remoción de encabezados que puedan haberse pegado como filas
+                situaciones = [s.strip() for s in situaciones_raw if s is not None]
+                encabezado_variantes = {"SITUACION", "SITUACIÓN", "SITUACI0N", "SITUACION:"}
+                encabezado_norm = {v.replace(" ", "").replace(":", "").upper() for v in encabezado_variantes}
+                situaciones = [
+                    s for s in situaciones
+                    if s and s.replace(" ", "").replace(":", "").upper() not in encabezado_norm
+                ]
+                # normalizar longitud
+                if len(situaciones) < len(df_temp):
+                    situaciones += [""] * (len(df_temp) - len(situaciones))
+                situaciones = situaciones[: len(df_temp)]
+            else:
+                # fallback: extraer from PDF las líneas de Situación (si existen)
+                situ_lines = _extract_situaciones_from_pdf(io.BytesIO(pdf_bytes))
+                situaciones = []
+                for ln in situ_lines:
+                    parts = re.split(r":", ln, maxsplit=1)
+                    val = parts[1].strip() if len(parts) > 1 else ln.strip()
+                    if val and val.replace(" ", "").upper() not in {"SITUACION", "SITUACIÓN"}:
+                        situaciones.append(val)
+                if not situaciones:
+                    situaciones = [""] * len(df_temp)
+                else:
+                    if len(situaciones) < len(df_temp):
+                        situaciones += [""] * (len(df_temp) - len(situaciones))
+                    situaciones = situaciones[: len(df_temp)]
 
             ref_out = df_temp.iloc[:, 7] if df_temp.shape[1] > 7 else pd.Series([""] * len(df_temp))
             nombre_out = df_temp.iloc[:, 3] if df_temp.shape[1] > 3 else (df_temp.iloc[:, 1] if df_temp.shape[1] > 1 else pd.Series([""] * len(df_temp)))
