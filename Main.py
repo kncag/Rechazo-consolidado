@@ -30,7 +30,7 @@ TXT_POS = {
 ESTADO = "rechazada"
 MULT = 2
 
-# Sólo estos tres tipos globales
+# Solo estos tres tipos globales
 CODE_DESC = {
     "R001": "DOCUMENTO ERRADO",
     "R002": "CUENTA INVALIDA",
@@ -46,6 +46,26 @@ KEYWORDS_NO_TIT = [
     "puedes continuar",
     "si deseas, puedes continuar",
 ]
+
+# Palabras asociadas a cada tipo de rechazo para BBVA
+BBVA_KEYWORDS = {
+    "R002": [
+        "CUENTA INEXISTENTE",
+        "CUENTA CANCELADA",
+        "CUENTA NO EXISTE",
+        "NO EXISTE LA CUENTA",
+        "INEXISTENTE",
+        "CANCELADA",
+    ],
+    "R001": [
+        "DOC. NO CORRESPONDE",
+        "DOCUMENTO NO CORRESPONDE",
+        "DOCUMENTO ERRADO",
+        "DOCUMENTO EQUIVOCADO",
+        "DNI NO COINCIDE",
+        "NO CORRESPONDE",
+    ],
+}
 
 OUT_COLS = [
     "dni/cex",
@@ -109,7 +129,7 @@ def select_code(key: str, default: str) -> tuple[str, str]:
         st.session_state[key] = default
     _, center, _ = st.columns([1, 2, 1])
     with center:
-        b1, b2, b3 = st.columns([1,1,1], gap="small")
+        b1, b2, b3 = st.columns([1, 1, 1], gap="small")
         if b1.button("R001\nDOCUMENTO ERRADO", key=f"{key}_r001"):
             st.session_state[key] = "R001"
         if b2.button("R002\nCUENTA INVALIDA", key=f"{key}_r002"):
@@ -150,26 +170,33 @@ def _extract_situaciones_from_pdf(pdf_stream) -> list[str]:
     situ_lines = [ln for ln in lines if re.search(r"\bsituaci[oó]n\b", ln, flags=re.IGNORECASE)]
     return situ_lines
 
-def _map_situacion_to_code_bbva(s: str) -> tuple[str, str]:
-    # Para BBVA: reglas solicitadas (normalizar entrada)
-    if s is None:
+def _map_situacion_to_code_bbva_by_keywords(s: str) -> tuple[str, str]:
+    if not s:
         return "R002", "CUENTA INVALIDA"
-    su = s.upper()
-    if "CUENTA INEXISTENTE" in su:
-        return "R002", "CUENTA INEXISTENTE"
-    if "DOC. NO CORRESPONDE" in su or "DOCUMENTO NO CORRESPONDE" in su or "DOC NO CORRESPONDE" in su:
-        return "R001", "DOCUMENTO ERRADO"
-    if "CUENTA CANCELADA" in su:
-        return "R002", "CUENTA CANCELADA"
-    # por defecto R002
-    return "R002", su.strip() if su.strip() else "CUENTA INVALIDA"
+    su = re.sub(r"\s+", " ", s.strip().upper())
+
+    # Prioridad R001
+    for kw in BBVA_KEYWORDS["R001"]:
+        if kw in su:
+            return "R001", "DOCUMENTO ERRADO"
+
+    # Luego R002
+    for kw in BBVA_KEYWORDS["R002"]:
+        if kw in su:
+            if "INEXISTENTE" in kw or "INEXISTENTE" in su:
+                return "R002", "CUENTA INEXISTENTE"
+            if "CANCELADA" in kw or "CANCELADA" in su:
+                return "R002", "CUENTA CANCELADA"
+            return "R002", "CUENTA INVALIDA"
+
+    # Fallback: R002 y descripción original (normalizada)
+    desc = su if su else "CUENTA INVALIDA"
+    return "R002", desc
 
 def _map_situacion_to_code_generic(s: str) -> tuple[str, str]:
-    # Conservador genérico (mantener comportamiento anterior para IBK)
     if s is None:
         return "R002", "CUENTA INVALIDA"
     su = s.upper()
-    # si detecta keywords de no titular
     if any(k in su.lower() for k in KEYWORDS_NO_TIT):
         return "R016", "CLIENTE NO TITULAR DE LA CUENTA"
     return "R002", "CUENTA INVALIDA"
@@ -267,7 +294,7 @@ def tab_pre_bcp_txt():
                 "Descargar excel de registros",
                 eb,
                 file_name="pre_bcp_txt.xlsx",
-                mime="application/vnd.openxmlformats-officedocument-spreadsheetml.sheet",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
             )
 
             _validate_and_post(df_out, "post_pre_txt")
@@ -296,7 +323,7 @@ def tab_rechazo_ibk():
                 "Referencia": df_valid.iloc[:, 7],
             })
             df_out["Estado"] = ESTADO
-            # aquí mantenemos mapeo conservador: IBK usa R016 para no-tit, si prefieres reducir a los tres globales, ajusta
+            # Conservador: IBK mantiene R016 para no-titulares; si deseas limitar a los 3 globales, cambia aquí
             df_out["Codigo de Rechazo"] = [
                 "R016" if any(k in str(o).lower() for k in KEYWORDS_NO_TIT) else "R002"
                 for o in df_valid.iloc[:, 14]
@@ -306,12 +333,6 @@ def tab_rechazo_ibk():
                 else "CUENTA INVALIDA"
                 for o in df_valid.iloc[:, 14]
             ]
-
-            # Si quieres forzar que IBK sólo use los tres códigos globales, descomenta el siguiente bloque
-            # and remove the block above.
-            #
-            # df_out["Codigo de Rechazo"] = ["R002"] * len(df_out)
-            # df_out["Descripcion de Rechazo"] = ["CUENTA INVALIDA"] * len(df_out)
 
             df_out = df_out[OUT_COLS]
 
@@ -380,7 +401,7 @@ def tab_post_bcp_xlsx():
             _validate_and_post(df_out, "post_post_xlsx")
 
 def tab_rechazo_bbva_xlsx():
-    # Mismo filtrado que POST BCP-xlsx, nombre de flujo "Rechazo BBVA", y mapeo según reglas solicitadas.
+    # Mismo filtrado que POST BCP-xlsx, nombre de flujo "Rechazo BBVA", y mapeo por keywords BBVA
     st.header("Rechazo BBVA")
     code_ui, desc_ui = select_code("pre_bbva_code", "R002")
 
@@ -430,12 +451,12 @@ def tab_rechazo_bbva_xlsx():
                 "Referencia": ref_out,
             })
 
-            # Mapear según reglas pedidas; sólo aplicar mapeo si 'situacion' tiene valor, sino usar selección UI
+            # Mapear según keywords BBVA; sólo aplicar mapeo si 'situacion' tiene valor, sino usar selección UI
             cods = []
             descs = []
             for s in situaciones:
                 if isinstance(s, str) and s.strip():
-                    code_m, desc_m = _map_situacion_to_code_bbva(s)
+                    code_m, desc_m = _map_situacion_to_code_bbva_by_keywords(s)
                 else:
                     code_m, desc_m = code_ui, desc_ui
                 cods.append(code_m)
