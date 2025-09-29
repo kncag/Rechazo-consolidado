@@ -423,18 +423,39 @@ def tab_rechazo_bbva_xlsx():
                 return
 
             # buscar columna 'situacion' en el DataFrame filtrado
-            situ_col = _find_situacion_column_in_df(df_temp)
-            situaciones = []
-            if situ_col:
-                situaciones = df_temp[situ_col].astype(str).fillna("").tolist()
-            else:
-                # fallback: extraer from PDF las líneas de Situación (si existen)
-                situ_lines = _extract_situaciones_from_pdf(io.BytesIO(pdf_bytes))
-                for ln in situ_lines:
-                    parts = re.split(r":", ln, maxsplit=1)
-                    situaciones.append(parts[1].strip() if len(parts) > 1 else ln.strip())
-                if not situaciones:
-                    situaciones = [""] * len(df_temp)
+           # obtener columna 'situacion' si existe
+situ_col = _find_situacion_column_in_df(df_temp)
+if situ_col:
+    # leer y limpiar espacios
+    situaciones_raw = df_temp[situ_col].astype(str).fillna("").tolist()
+    situaciones = [s.strip() for s in situaciones_raw]
+
+    # eliminar entradas que sean solo el encabezado o variantes (puede ocurrir si la tabla se pegó con header en fila)
+    encabezado_variantes = {"SITUACION", "SITUACIÓN", "SITUACI0N", "SITUACION:"}
+    situaciones = [s for s in situaciones if s.upper().replace(" ", "").replace(":", "") not in {v.replace(" ", "").replace(":", "") for v in encabezado_variantes}]
+
+    # si tras eliminar encabezados hay menos valores que filas, rellenamos con vacíos
+    if len(situaciones) < len(df_temp):
+        situaciones += [""] * (len(df_temp) - len(situaciones))
+    # si hay más (por ejemplo, extracción duplicada), cortamos a la longitud necesaria
+    situaciones = situaciones[: len(df_temp)]
+else:
+    # fallback previo: extraer líneas del PDF que contengan 'Situación' y procesarlas igual
+    situ_lines = _extract_situaciones_from_pdf(io.BytesIO(pdf_bytes))
+    situaciones = []
+    for ln in situ_lines:
+        parts = re.split(r":", ln, maxsplit=1)
+        val = parts[1].strip() if len(parts) > 1 else ln.strip()
+        # ignorar si es solo la palabra 'Situación'
+        if val.upper().replace(" ", "") in {"SITUACION", "SITUACIÓN"}:
+            continue
+        situaciones.append(val)
+    if not situaciones:
+        situaciones = [""] * len(df_temp)
+    else:
+        if len(situaciones) < len(df_temp):
+            situaciones += [""] * (len(df_temp) - len(situaciones))
+        situaciones = situaciones[: len(df_temp)]
 
             # asegurar longitud 1:1
             if len(situaciones) < len(df_temp):
