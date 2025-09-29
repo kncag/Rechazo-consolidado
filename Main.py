@@ -26,6 +26,7 @@ TXT_POS = {
     "referencia": (115, 126),
     "importe": (186, 195),
 }
+
 ESTADO = "rechazada"
 MULT = 2
 
@@ -132,16 +133,14 @@ def _count_and_sum(df: pd.DataFrame) -> tuple[int, float]:
     return cnt, total
 
 def _find_situacion_column_in_df(df: pd.DataFrame) -> str | None:
-    # busca variantes de 'situación' en columnas (case-insensitive, sin tildes)
     def norm(s: str) -> str:
         return re.sub(r"[^\w]", "", s.strip().lower().replace("ó", "o").replace("í", "i"))
     for col in df.columns:
-        if norm(col) in {"situacion", "situacion"}:
+        if norm(col) == "situacion":
             return col
     return None
 
 def _extract_situaciones_from_pdf(pdf_stream) -> list[str]:
-    # retorna una lista de lines que contengan 'situación' o 'situacion', ordenadas por aparición
     text = "".join(p.get_text() or "" for p in fitz.open(stream=pdf_stream, filetype="pdf"))
     lines = [ln.strip() for ln in text.splitlines() if ln.strip()]
     situ_lines = [ln for ln in lines if re.search(r"\bsituaci[oó]n\b", ln, flags=re.IGNORECASE)]
@@ -157,7 +156,6 @@ def _map_situacion_to_code(s: str) -> tuple[str, str]:
         return "R001", "DOC. NO CORRESPONDE"
     if "CUENTA CANCELADA" in su:
         return "R002", "CUENTA CANCELADA"
-    # por defecto R002 para cualquier otro mensaje
     return "R002", su.strip() if su.strip() else "CUENTA INVALIDA"
 
 # -------------- Flujos --------------
@@ -177,18 +175,16 @@ def tab_pre_bcp_xlsx():
             df_raw = pd.read_excel(ex_file, dtype=str)
             df_temp = df_raw.iloc[filas].reset_index(drop=True)
 
-            # referencias internas y de salida
-            ref_int = df_temp.iloc[:, 3]   # col D para lógica interna
-            ref_out = df_temp.iloc[:, 7]   # col H para output
+            ref_int = df_temp.iloc[:, 3] if df_temp.shape[1] > 3 else pd.Series([""] * len(df_temp))
+            ref_out = df_temp.iloc[:, 7] if df_temp.shape[1] > 7 else pd.Series([""] * len(df_temp))
 
-            # nombres internos y de salida
-            nombre_int = df_temp.iloc[:, 1]  # col B para lógica interna
-            nombre_out = df_temp.iloc[:, 3]  # col D para output
+            nombre_int = df_temp.iloc[:, 1] if df_temp.shape[1] > 1 else pd.Series([""] * len(df_temp))
+            nombre_out = df_temp.iloc[:, 3] if df_temp.shape[1] > 3 else nombre_int
 
             df_out = pd.DataFrame({
                 "dni/cex": df_temp.iloc[:, 0],
                 "nombre": nombre_out,
-                "importe": df_temp.iloc[:, 12].apply(parse_amount),
+                "importe": df_temp.iloc[:, 12].apply(parse_amount) if df_temp.shape[1] > 12 else pd.Series([0.0] * len(df_temp)),
                 "Referencia": ref_out,
             })
             df_out["Estado"] = ESTADO
@@ -196,7 +192,6 @@ def tab_pre_bcp_xlsx():
             df_out["Descripcion de Rechazo"] = desc
             df_out = df_out[OUT_COLS]
 
-            # contador y suma
             cnt, total = _count_and_sum(df_out)
             st.write(f"**Total transacciones:** {cnt}   |   **Suma de importes:** {total:,.2f}")
 
@@ -288,7 +283,6 @@ def tab_rechazo_ibk():
                 "importe": df_valid.iloc[:, 13].apply(parse_amount),
                 "Referencia": df_valid.iloc[:, 7],
             })
-            # mapa conservador para IBK (igual que antes)
             df_out["Estado"] = ESTADO
             df_out["Codigo de Rechazo"] = [
                 "R016" if any(k in str(o).lower() for k in KEYWORDS_NO_TIT) else "R002"
@@ -311,7 +305,7 @@ def tab_rechazo_ibk():
                 "Descargar excel de registros",
                 eb,
                 file_name="rechazo_ibk.xlsx",
-                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                mime="application/vnd.openxmlformats-officedocument-spreadsheetml.sheet",
             )
 
             _validate_and_post(df_out, "post_ibk")
@@ -333,18 +327,16 @@ def tab_post_bcp_xlsx():
             mask = df_raw.astype(str).apply(lambda col: col.isin(docs)).any(axis=1)
             df_temp = df_raw.loc[mask].reset_index(drop=True)
 
-            # referencias internas y de salida
-            ref_int = df_temp.iloc[:, 3]   # col D para lógica interna
-            ref_out = df_temp.iloc[:, 7]   # col H para output
+            ref_int = df_temp.iloc[:, 3] if df_temp.shape[1] > 3 else pd.Series([""] * len(df_temp))
+            ref_out = df_temp.iloc[:, 7] if df_temp.shape[1] > 7 else pd.Series([""] * len(df_temp))
 
-            # nombres internos y de salida
-            nombre_int = df_temp.iloc[:, 1]  # col B para lógica interna
-            nombre_out = df_temp.iloc[:, 3]  # col D para output
+            nombre_int = df_temp.iloc[:, 1] if df_temp.shape[1] > 1 else pd.Series([""] * len(df_temp))
+            nombre_out = df_temp.iloc[:, 3] if df_temp.shape[1] > 3 else nombre_int
 
             df_out = pd.DataFrame({
                 "dni/cex": df_temp.iloc[:, 0],
                 "nombre": nombre_out,
-                "importe": df_temp.iloc[:, 12].apply(parse_amount),
+                "importe": df_temp.iloc[:, 12].apply(parse_amount) if df_temp.shape[1] > 12 else pd.Series([0.0] * len(df_temp)),
                 "Referencia": ref_out,
             })
             df_out["Estado"] = ESTADO
@@ -362,7 +354,7 @@ def tab_post_bcp_xlsx():
                 "Descargar excel de registros",
                 eb,
                 file_name="post_bcp_xlsx.xlsx",
-                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                mime="application/vnd.openxmlformats-officedocument-spreadsheetml.sheet",
             )
 
             _validate_and_post(df_out, "post_post_xlsx")
@@ -370,47 +362,38 @@ def tab_post_bcp_xlsx():
 def tab_pre_bbva_xlsx():
     # misma lógica que POST BCP-xlsx pero mapeo de 'situación' para códigos
     st.header("PRE BBVA-xlsx")
-    code, _ = select_code("pre_bbva_code", "R002")  # default en UI, pero se sobrescribe por situacion
+    code_ui, desc_ui = select_code("pre_bbva_code", "R002")  # defaults editable por UI but used if situacion empty
     pdf_file = st.file_uploader("PDF con Situación", type="pdf", key="pre_bbva_pdf")
     ex_file = st.file_uploader("Excel masivo", type="xlsx", key="pre_bbva_xls")
     if pdf_file and ex_file:
         with st.spinner("Procesando PRE BBVA-xlsx…"):
-            # intento leer situaciones desde el DataFrame primero
             df_raw = pd.read_excel(ex_file, dtype=str)
             df_temp = df_raw.reset_index(drop=True)
 
-            # prioridad: buscar columna 'situación' en el excel
+            # buscar columna 'situacion' en el excel
             situ_col = _find_situacion_column_in_df(df_temp)
             situaciones = None
             if situ_col:
                 situaciones = df_temp[situ_col].astype(str).fillna("").tolist()
             else:
-                # fallback: extraer líneas del PDF que mencionen 'situación'
+                # extraer líneas del PDF que mencionen 'situación'
                 situ_lines = _extract_situaciones_from_pdf(pdf_file.read())
-                # tomar la parte después de ':' si existe, o la línea completa; repetir/trim
                 situaciones = []
                 for ln in situ_lines:
                     m = re.split(r":", ln, maxsplit=1)
                     situaciones.append(m[1].strip() if len(m) > 1 else ln.strip())
-                # si no encontramos ninguna situación en el pdf, rellenamos con empty
                 if not situaciones:
                     situaciones = [""] * len(df_temp)
 
-            # ahora aplicamos match por filas: asumimos 1:1 entre df_temp rows y situaciones
-            # si hay menos situaciones que filas, rellenamos con empty
+            # normalizar longitud
             if len(situaciones) < len(df_temp):
                 situaciones = situaciones + [""] * (len(df_temp) - len(situaciones))
             situaciones = situaciones[: len(df_temp)]
 
-            # referencias internas y de salida (como en POST)
-            ref_int = df_temp.iloc[:, 3] if df_temp.shape[1] > 3 else pd.Series([""] * len(df_temp))
+            # referencias y nombres (internos/outputs)
             ref_out = df_temp.iloc[:, 7] if df_temp.shape[1] > 7 else pd.Series([""] * len(df_temp))
+            nombre_out = df_temp.iloc[:, 3] if df_temp.shape[1] > 3 else (df_temp.iloc[:, 1] if df_temp.shape[1] > 1 else pd.Series([""] * len(df_temp)))
 
-            # nombres internos y de salida
-            nombre_int = df_temp.iloc[:, 1] if df_temp.shape[1] > 1 else pd.Series([""] * len(df_temp))
-            nombre_out = df_temp.iloc[:, 3] if df_temp.shape[1] > 3 else nombre_int
-
-            # construir df_out
             df_out = pd.DataFrame({
                 "dni/cex": df_temp.iloc[:, 0] if df_temp.shape[1] > 0 else pd.Series([""] * len(df_temp)),
                 "nombre": nombre_out,
@@ -418,11 +401,15 @@ def tab_pre_bbva_xlsx():
                 "Referencia": ref_out,
             })
 
-            # construir códigos/descripciones a partir de 'situaciones'
+            # Asignar Codigo/Descripcion: solo usar mapeo cuando exista valor en 'situacion'
             cods = []
             descs = []
             for s in situaciones:
-                code_m, desc_m = _map_situacion_to_code(s)
+                if isinstance(s, str) and s.strip():
+                    code_m, desc_m = _map_situacion_to_code(s)
+                else:
+                    # si no hay situacion, usar el código/desc seleccionado en UI
+                    code_m, desc_m = code_ui, desc_ui
                 cods.append(code_m)
                 descs.append(desc_m)
 
@@ -441,7 +428,7 @@ def tab_pre_bbva_xlsx():
                 "Descargar excel de registros",
                 eb,
                 file_name="pre_bbva_xlsx.xlsx",
-                mime="application/vnd.openxmlformats-officedocument-spreadsheetml.sheet",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
             )
 
             _validate_and_post(df_out, "post_pre_bbva_xlsx")
