@@ -254,23 +254,40 @@ def tab_pre_bcp_txt():
     txt_file = st.file_uploader("TXT", type="txt", key="pre_txt_txt")
     if pdf_file and txt_file:
         with st.spinner("Procesando PRE BCP-txt…"):
+            # leer PDF y obtener registros
             pdf_bytes = pdf_file.read()
-            text = "".join(p.get_text() or "" for p in fitz.open(stream=io.BytesIO(pdf_bytes), filetype="pdf"))
-            regs = sorted({int(m) for m in re.findall(r"Registro\s+(\d{1,5})", text)})
-            lines = txt_file.read().decode("utf-8", errors="ignore").splitlines()
-            indices = sorted({r * MULT for r in regs})
+            pdf_text = "".join(p.get_text() or "" for p in fitz.open(stream=io.BytesIO(pdf_bytes), filetype="pdf"))
+            regs = sorted({int(m) for m in re.findall(r"Registro\s+(\d{1,5})", pdf_text)}) if pdf_text else []
 
+            # leer TXT seguro
+            txt_content = txt_file.read()
+            try:
+                lines = txt_content.decode("utf-8", errors="ignore").splitlines()
+            except Exception:
+                lines = str(txt_content).splitlines()
+
+            if not regs:
+                st.warning("No se encontraron registros en el PDF (patrón 'Registro N'). Asegúrate del PDF o patrón.")
+            indices = sorted({r * MULT for r in regs}) if regs else []
+
+            # construir filas garantizando las claves
             rows = []
             for i in indices:
                 if 1 <= i <= len(lines):
                     ln = lines[i - 1]
-                    dni = slice_fixed(ln, *TXT_POS["dni"])
-                    nombre = slice_fixed(ln, *TXT_POS["nombre"])
-                    ref = slice_fixed(ln, *TXT_POS["referencia"])
-                    imp = parse_amount(slice_fixed(ln, *TXT_POS["importe"]))
+                    dni = slice_fixed(ln, *TXT_POS["dni"]) or ""
+                    nombre = slice_fixed(ln, *TXT_POS["nombre"]) or ""
+                    ref = slice_fixed(ln, *TXT_POS["referencia"]) or ""
+                    try:
+                        imp = parse_amount(slice_fixed(ln, *TXT_POS["importe"]))
+                    except Exception:
+                        imp = 0.0
                 else:
-                    dni = nombre = ref = ""
+                    dni = ""
+                    nombre = ""
+                    ref = ""
                     imp = 0.0
+
                 rows.append({
                     "dni/cex": dni,
                     "nombre": nombre,
@@ -278,7 +295,16 @@ def tab_pre_bcp_txt():
                     "Referencia": ref,
                 })
 
-            df_out = pd.DataFrame(rows)[["dni/cex", "nombre", "importe", "Referencia"]]
+            # si rows quedó vacío, crear DataFrame vacío con columnas esperadas
+            if not rows:
+                df_out = pd.DataFrame(columns=["dni/cex", "nombre", "importe", "Referencia"])
+            else:
+                df_out = pd.DataFrame(rows)
+
+            # reindex para forzar las 4 columnas en ese orden (evita KeyError)
+            df_out = df_out.reindex(columns=["dni/cex", "nombre", "importe", "Referencia"])
+
+            # completar columnas de salida y metadatos
             df_out["Estado"] = ESTADO
             df_out["Codigo de Rechazo"] = code_ui
             df_out["Descripcion de Rechazo"] = desc_ui
@@ -294,7 +320,7 @@ def tab_pre_bcp_txt():
                 "Descargar excel de registros",
                 eb,
                 file_name="pre_bcp_txt.xlsx",
-                mime="application/vnd.openxmlformats-officedocument-spreadsheetml.sheet",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
             )
 
             _validate_and_post(df_out, "post_pre_txt")
@@ -491,7 +517,7 @@ def tab_rechazo_bbva_xlsx():
                 "Descargar excel de registros",
                 eb,
                 file_name="rechazo_bbva_xlsx.xlsx",
-                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                mime="application/vnd.openxmlformats-officedocument-spreadsheetml.sheet",
             )
 
             _validate_and_post(df_out, "post_rechazo_bbva_xlsx")
