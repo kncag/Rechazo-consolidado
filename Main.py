@@ -30,9 +30,11 @@ TXT_POS = {
 ESTADO = "rechazada"
 MULT = 2
 
+# Sólo estos tres tipos globales
 CODE_DESC = {
     "R001": "DOCUMENTO ERRADO",
     "R002": "CUENTA INVALIDA",
+    "R007": "RECHAZO POR CCI",
 }
 
 KEYWORDS_NO_TIT = [
@@ -107,11 +109,13 @@ def select_code(key: str, default: str) -> tuple[str, str]:
         st.session_state[key] = default
     _, center, _ = st.columns([1, 2, 1])
     with center:
-        b1, b2 = st.columns(2, gap="small")
+        b1, b2, b3 = st.columns([1,1,1], gap="small")
         if b1.button("R001\nDOCUMENTO ERRADO", key=f"{key}_r001"):
             st.session_state[key] = "R001"
         if b2.button("R002\nCUENTA INVALIDA", key=f"{key}_r002"):
             st.session_state[key] = "R002"
+        if b3.button("R007\nRECHAZO POR CCI", key=f"{key}_r007"):
+            st.session_state[key] = "R007"
     code = st.session_state[key]
     desc = CODE_DESC[code]
     st.write("Código de rechazo seleccionado:", f"**{code} – {desc}**")
@@ -146,40 +150,48 @@ def _extract_situaciones_from_pdf(pdf_stream) -> list[str]:
     situ_lines = [ln for ln in lines if re.search(r"\bsituaci[oó]n\b", ln, flags=re.IGNORECASE)]
     return situ_lines
 
-def _map_situacion_to_code(s: str) -> tuple[str, str]:
+def _map_situacion_to_code_bbva(s: str) -> tuple[str, str]:
+    # Para BBVA: reglas solicitadas (normalizar entrada)
     if s is None:
         return "R002", "CUENTA INVALIDA"
     su = s.upper()
     if "CUENTA INEXISTENTE" in su:
         return "R002", "CUENTA INEXISTENTE"
     if "DOC. NO CORRESPONDE" in su or "DOCUMENTO NO CORRESPONDE" in su or "DOC NO CORRESPONDE" in su:
-        return "R001", "DOC. NO CORRESPONDE"
+        return "R001", "DOCUMENTO ERRADO"
     if "CUENTA CANCELADA" in su:
         return "R002", "CUENTA CANCELADA"
+    # por defecto R002
     return "R002", su.strip() if su.strip() else "CUENTA INVALIDA"
+
+def _map_situacion_to_code_generic(s: str) -> tuple[str, str]:
+    # Conservador genérico (mantener comportamiento anterior para IBK)
+    if s is None:
+        return "R002", "CUENTA INVALIDA"
+    su = s.upper()
+    # si detecta keywords de no titular
+    if any(k in su.lower() for k in KEYWORDS_NO_TIT):
+        return "R016", "CLIENTE NO TITULAR DE LA CUENTA"
+    return "R002", "CUENTA INVALIDA"
 
 # -------------- Flujos --------------
 def tab_pre_bcp_xlsx():
     st.header("Antigua manera de rechazar con PDF")
-    code, desc = select_code("pre_xlsx_code", "R002")
+    code_ui, desc_ui = select_code("pre_xlsx_code", "R002")
 
     pdf_file = st.file_uploader("PDF con filas", type="pdf", key="pre_xlsx_pdf")
     ex_file = st.file_uploader("Excel masivo", type="xlsx", key="pre_xlsx_xls")
     if pdf_file and ex_file:
         with st.spinner("Procesando PRE BCP-xlsx…"):
-            text = "".join(p.get_text() or "" for p in fitz.open(
-                stream=pdf_file.read(), filetype="pdf"
-            ))
+            pdf_bytes = pdf_file.read()
+            text = "".join(p.get_text() or "" for p in fitz.open(stream=io.BytesIO(pdf_bytes), filetype="pdf"))
             filas = sorted({int(n) + 1 for n in re.findall(r"Registro\s+(\d+)", text)})
 
             df_raw = pd.read_excel(ex_file, dtype=str)
             df_temp = df_raw.iloc[filas].reset_index(drop=True)
 
-            ref_int = df_temp.iloc[:, 3] if df_temp.shape[1] > 3 else pd.Series([""] * len(df_temp))
             ref_out = df_temp.iloc[:, 7] if df_temp.shape[1] > 7 else pd.Series([""] * len(df_temp))
-
-            nombre_int = df_temp.iloc[:, 1] if df_temp.shape[1] > 1 else pd.Series([""] * len(df_temp))
-            nombre_out = df_temp.iloc[:, 3] if df_temp.shape[1] > 3 else nombre_int
+            nombre_out = df_temp.iloc[:, 3] if df_temp.shape[1] > 3 else (df_temp.iloc[:, 1] if df_temp.shape[1] > 1 else pd.Series([""] * len(df_temp)))
 
             df_out = pd.DataFrame({
                 "dni/cex": df_temp.iloc[:, 0],
@@ -188,8 +200,8 @@ def tab_pre_bcp_xlsx():
                 "Referencia": ref_out,
             })
             df_out["Estado"] = ESTADO
-            df_out["Codigo de Rechazo"] = code
-            df_out["Descripcion de Rechazo"] = desc
+            df_out["Codigo de Rechazo"] = code_ui
+            df_out["Descripcion de Rechazo"] = desc_ui
             df_out = df_out[OUT_COLS]
 
             cnt, total = _count_and_sum(df_out)
@@ -209,15 +221,14 @@ def tab_pre_bcp_xlsx():
 
 def tab_pre_bcp_txt():
     st.header("PRE BCP-txt")
-    code, desc = select_code("pre_txt_code", "R002")
+    code_ui, desc_ui = select_code("pre_txt_code", "R002")
 
     pdf_file = st.file_uploader("PDF", type="pdf", key="pre_txt_pdf")
     txt_file = st.file_uploader("TXT", type="txt", key="pre_txt_txt")
     if pdf_file and txt_file:
         with st.spinner("Procesando PRE BCP-txt…"):
-            text = "".join(p.get_text() or "" for p in fitz.open(
-                stream=pdf_file.read(), filetype="pdf"
-            ))
+            pdf_bytes = pdf_file.read()
+            text = "".join(p.get_text() or "" for p in fitz.open(stream=io.BytesIO(pdf_bytes), filetype="pdf"))
             regs = sorted({int(m) for m in re.findall(r"Registro\s+(\d{1,5})", text)})
             lines = txt_file.read().decode("utf-8", errors="ignore").splitlines()
             indices = sorted({r * MULT for r in regs})
@@ -242,8 +253,8 @@ def tab_pre_bcp_txt():
 
             df_out = pd.DataFrame(rows)[["dni/cex", "nombre", "importe", "Referencia"]]
             df_out["Estado"] = ESTADO
-            df_out["Codigo de Rechazo"] = code
-            df_out["Descripcion de Rechazo"] = desc
+            df_out["Codigo de Rechazo"] = code_ui
+            df_out["Descripcion de Rechazo"] = desc_ui
             df_out = df_out[OUT_COLS]
 
             cnt, total = _count_and_sum(df_out)
@@ -263,6 +274,7 @@ def tab_pre_bcp_txt():
 
 def tab_rechazo_ibk():
     st.header("rechazo IBK")
+    code_ui, desc_ui = select_code("ibk_code", "R002")
 
     zip_file = st.file_uploader("ZIP con Excel", type="zip", key="ibk_zip")
     if zip_file:
@@ -284,6 +296,7 @@ def tab_rechazo_ibk():
                 "Referencia": df_valid.iloc[:, 7],
             })
             df_out["Estado"] = ESTADO
+            # aquí mantenemos mapeo conservador: IBK usa R016 para no-tit, si prefieres reducir a los tres globales, ajusta
             df_out["Codigo de Rechazo"] = [
                 "R016" if any(k in str(o).lower() for k in KEYWORDS_NO_TIT) else "R002"
                 for o in df_valid.iloc[:, 14]
@@ -293,6 +306,13 @@ def tab_rechazo_ibk():
                 else "CUENTA INVALIDA"
                 for o in df_valid.iloc[:, 14]
             ]
+
+            # Si quieres forzar que IBK sólo use los tres códigos globales, descomenta el siguiente bloque
+            # and remove the block above.
+            #
+            # df_out["Codigo de Rechazo"] = ["R002"] * len(df_out)
+            # df_out["Descripcion de Rechazo"] = ["CUENTA INVALIDA"] * len(df_out)
+
             df_out = df_out[OUT_COLS]
 
             cnt, total = _count_and_sum(df_out)
@@ -305,33 +325,33 @@ def tab_rechazo_ibk():
                 "Descargar excel de registros",
                 eb,
                 file_name="rechazo_ibk.xlsx",
-                mime="application/vnd.openxmlformats-officedocument-spreadsheetml.sheet",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
             )
 
             _validate_and_post(df_out, "post_ibk")
 
 def tab_post_bcp_xlsx():
     st.header("POST BCP-xlsx")
-    code, desc = select_code("post_xlsx_code", "R001")
+    code_ui, desc_ui = select_code("post_xlsx_code", "R001")
 
     pdf_file = st.file_uploader("PDF de DNIs", type="pdf", key="post_xlsx_pdf")
     ex_file = st.file_uploader("Excel masivo", type="xlsx", key="post_xlsx_xls")
     if pdf_file and ex_file:
         with st.spinner("Procesando POST BCP-xlsx…"):
-            text = "".join(p.get_text() or "" for p in fitz.open(
-                stream=pdf_file.read(), filetype="pdf"
-            ))
+            pdf_bytes = pdf_file.read()
+            text = "".join(p.get_text() or "" for p in fitz.open(stream=io.BytesIO(pdf_bytes), filetype="pdf"))
             docs = set(re.findall(r"\b\d{6,}\b", text))
 
             df_raw = pd.read_excel(ex_file, dtype=str)
-            mask = df_raw.astype(str).apply(lambda col: col.isin(docs)).any(axis=1)
-            df_temp = df_raw.loc[mask].reset_index(drop=True)
+            if docs:
+                mask = df_raw.astype(str).apply(lambda col: col.isin(docs)).any(axis=1)
+                df_temp = df_raw.loc[mask].reset_index(drop=True)
+            else:
+                st.error("No se detectaron identificadores en el PDF. Adjunte un PDF válido.")
+                return
 
-            ref_int = df_temp.iloc[:, 3] if df_temp.shape[1] > 3 else pd.Series([""] * len(df_temp))
             ref_out = df_temp.iloc[:, 7] if df_temp.shape[1] > 7 else pd.Series([""] * len(df_temp))
-
-            nombre_int = df_temp.iloc[:, 1] if df_temp.shape[1] > 1 else pd.Series([""] * len(df_temp))
-            nombre_out = df_temp.iloc[:, 3] if df_temp.shape[1] > 3 else nombre_int
+            nombre_out = df_temp.iloc[:, 3] if df_temp.shape[1] > 3 else (df_temp.iloc[:, 1] if df_temp.shape[1] > 1 else pd.Series([""] * len(df_temp)))
 
             df_out = pd.DataFrame({
                 "dni/cex": df_temp.iloc[:, 0],
@@ -340,8 +360,8 @@ def tab_post_bcp_xlsx():
                 "Referencia": ref_out,
             })
             df_out["Estado"] = ESTADO
-            df_out["Codigo de Rechazo"] = code
-            df_out["Descripcion de Rechazo"] = desc
+            df_out["Codigo de Rechazo"] = code_ui
+            df_out["Descripcion de Rechazo"] = desc_ui
             df_out = df_out[OUT_COLS]
 
             cnt, total = _count_and_sum(df_out)
@@ -359,38 +379,47 @@ def tab_post_bcp_xlsx():
 
             _validate_and_post(df_out, "post_post_xlsx")
 
-def tab_pre_bbva_xlsx():
-    # misma lógica que POST BCP-xlsx pero mapeo de 'situación' para códigos
-    st.header("PRE BBVA-xlsx")
-    code_ui, desc_ui = select_code("pre_bbva_code", "R002")  # defaults editable por UI but used if situacion empty
+def tab_rechazo_bbva_xlsx():
+    # Mismo filtrado que POST BCP-xlsx, nombre de flujo "Rechazo BBVA", y mapeo según reglas solicitadas.
+    st.header("Rechazo BBVA")
+    code_ui, desc_ui = select_code("pre_bbva_code", "R002")
+
     pdf_file = st.file_uploader("PDF con Situación", type="pdf", key="pre_bbva_pdf")
     ex_file = st.file_uploader("Excel masivo", type="xlsx", key="pre_bbva_xls")
     if pdf_file and ex_file:
-        with st.spinner("Procesando PRE BBVA-xlsx…"):
-            df_raw = pd.read_excel(ex_file, dtype=str)
-            df_temp = df_raw.reset_index(drop=True)
+        with st.spinner("Procesando Rechazo BBVA…"):
+            pdf_bytes = pdf_file.read()
+            pdf_text = "".join(p.get_text() or "" for p in fitz.open(stream=io.BytesIO(pdf_bytes), filetype="pdf"))
+            docs = set(re.findall(r"\b\d{6,}\b", pdf_text))
 
-            # buscar columna 'situacion' en el excel
+            df_raw = pd.read_excel(ex_file, dtype=str)
+            # FILTRADO idéntico a POST BCP-xlsx
+            if docs:
+                mask = df_raw.astype(str).apply(lambda col: col.isin(docs)).any(axis=1)
+                df_temp = df_raw.loc[mask].reset_index(drop=True)
+            else:
+                st.error("No se detectaron identificadores en el PDF. Adjunte un PDF válido.")
+                return
+
+            # buscar columna 'situacion' en el DataFrame filtrado
             situ_col = _find_situacion_column_in_df(df_temp)
-            situaciones = None
+            situaciones = []
             if situ_col:
                 situaciones = df_temp[situ_col].astype(str).fillna("").tolist()
             else:
-                # extraer líneas del PDF que mencionen 'situación'
-                situ_lines = _extract_situaciones_from_pdf(pdf_file.read())
-                situaciones = []
+                # fallback: extraer from PDF las líneas de Situación (si existen)
+                situ_lines = _extract_situaciones_from_pdf(io.BytesIO(pdf_bytes))
                 for ln in situ_lines:
-                    m = re.split(r":", ln, maxsplit=1)
-                    situaciones.append(m[1].strip() if len(m) > 1 else ln.strip())
+                    parts = re.split(r":", ln, maxsplit=1)
+                    situaciones.append(parts[1].strip() if len(parts) > 1 else ln.strip())
                 if not situaciones:
                     situaciones = [""] * len(df_temp)
 
-            # normalizar longitud
+            # asegurar longitud 1:1
             if len(situaciones) < len(df_temp):
-                situaciones = situaciones + [""] * (len(df_temp) - len(situaciones))
+                situaciones += [""] * (len(df_temp) - len(situaciones))
             situaciones = situaciones[: len(df_temp)]
 
-            # referencias y nombres (internos/outputs)
             ref_out = df_temp.iloc[:, 7] if df_temp.shape[1] > 7 else pd.Series([""] * len(df_temp))
             nombre_out = df_temp.iloc[:, 3] if df_temp.shape[1] > 3 else (df_temp.iloc[:, 1] if df_temp.shape[1] > 1 else pd.Series([""] * len(df_temp)))
 
@@ -401,14 +430,13 @@ def tab_pre_bbva_xlsx():
                 "Referencia": ref_out,
             })
 
-            # Asignar Codigo/Descripcion: solo usar mapeo cuando exista valor en 'situacion'
+            # Mapear según reglas pedidas; sólo aplicar mapeo si 'situacion' tiene valor, sino usar selección UI
             cods = []
             descs = []
             for s in situaciones:
                 if isinstance(s, str) and s.strip():
-                    code_m, desc_m = _map_situacion_to_code(s)
+                    code_m, desc_m = _map_situacion_to_code_bbva(s)
                 else:
-                    # si no hay situacion, usar el código/desc seleccionado en UI
                     code_m, desc_m = code_ui, desc_ui
                 cods.append(code_m)
                 descs.append(desc_m)
@@ -427,17 +455,17 @@ def tab_pre_bbva_xlsx():
             st.download_button(
                 "Descargar excel de registros",
                 eb,
-                file_name="pre_bbva_xlsx.xlsx",
+                file_name="rechazo_bbva_xlsx.xlsx",
                 mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
             )
 
-            _validate_and_post(df_out, "post_pre_bbva_xlsx")
+            _validate_and_post(df_out, "post_rechazo_bbva_xlsx")
 
 # -------------- Render pestañas --------------
 tabs = st.tabs([
     "PRE BCP-txt",
     "-",  # Antigua manera de rechazar con PDF
-    "PRE BBVA-xlsx",
+    "Rechazo BBVA",
     "rechazo IBK",
     "POST BCP-xlsx",
 ])
@@ -447,7 +475,7 @@ with tabs[0]:
 with tabs[1]:
     tab_pre_bcp_xlsx()
 with tabs[2]:
-    tab_pre_bbva_xlsx()
+    tab_rechazo_bbva_xlsx()
 with tabs[3]:
     tab_rechazo_ibk()
 with tabs[4]:
