@@ -13,7 +13,7 @@ except ImportError:
     fitz = None
 
 # -------------- Configuración --------------
-st.text(_extract_text_from_pdf_bytes(pdf_bytes)[:4000])
+
 st.set_page_config(layout="centered", page_title="Rechazos MASIVOS Unificado")
 
 ENDPOINT = "https://q6caqnpy09.execute-api.us-east-1.amazonaws.com/OPS/kpayout/v1/payout_process/reject_invoices_batch"
@@ -520,7 +520,7 @@ def tab_bbva():
             )
 
             _validate_and_post(df_out, "post_bbva")
-
+st.text(_extract_text_from_pdf_bytes(pdf_bytes)[:4000])
 # -------------- Render pestañas --------------
 tabs = st.tabs([
     "PRE BCP-txt",
