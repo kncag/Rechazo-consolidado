@@ -486,7 +486,7 @@ def tab_bbva():
                 "importe": df_temp.iloc[:, 12].apply(parse_amount) if df_temp.shape[1] > 12 else pd.Series([0.0] * len(df_temp)),
                 "Referencia": ref_out,
             })
-
+st.text(_extract_text_from_pdf_bytes(pdf_bytes)[:4000])
             # Mapear situación a código y descripción estandarizados
             cods = []
             descs = []
@@ -520,7 +520,6 @@ def tab_bbva():
             )
 
             _validate_and_post(df_out, "post_bbva")
-st.text(_extract_text_from_pdf_bytes(pdf_bytes)[:4000])
 # -------------- Render pestañas --------------
 tabs = st.tabs([
     "PRE BCP-txt",
