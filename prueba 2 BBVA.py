@@ -13,7 +13,6 @@ except ImportError:
     fitz = None
 
 # -------------- Configuración --------------
-
 st.set_page_config(layout="centered", page_title="Rechazos MASIVOS Unificado")
 
 ENDPOINT = "https://q6caqnpy09.execute-api.us-east-1.amazonaws.com/OPS/kpayout/v1/payout_process/reject_invoices_batch"
@@ -30,16 +29,16 @@ MULT = 2
 
 # Tipos globales
 CODE_DESC = {
-    "R001" "DOCUMENTO ERRADO",
-    "R002" "CUENTA INVALIDA",
-    "R007" "RECHAZO POR CCI",
+    "R001": "DOCUMENTO ERRADO",
+    "R002": "CUENTA INVALIDA",
+    "R007": "RECHAZO POR CCI",
 }
 
 # BBVA keywords solicitados
 BBVA_KEYWORDS = {
-    "R001" ["DOC. NO CORRESPONDE"],
-    "R002" ["CUENTA INEXISTENTE", "CTA C/ERR NO IDENTIF"],
-    "R007" ["REGISTRO CON ERRORES", "CUENTA NO ENCONTRADA"],
+    "R001": ["DOC. NO CORRESPONDE"],
+    "R002": ["CUENTA INEXISTENTE", "CTA C/ERR NO IDENTIF"],
+    "R007": ["REGISTRO CON ERRORES", "CUENTA NO ENCONTRADA"],
 }
 
 KEYWORDS_NO_TIT = [
@@ -167,7 +166,7 @@ def _extract_id_situ_pairs_from_pdf_text(text: str) -> dict:
 
     lines = [ln.strip() for ln in text.splitlines() if ln.strip()]
     id_pattern = re.compile(r"\b\d{6,}\b")
-    situ_pattern = re.compile(r"\bsituac\b", flags=re.IGNORECASE)
+    situ_pattern = re.compile(r"\bsituaci[oó]n\b", flags=re.IGNORECASE)
 
     for idx, ln in enumerate(lines):
         if situ_pattern.search(ln):
@@ -621,6 +620,7 @@ def tab_bbva():
             )
 
             _validate_and_post(df_out, "post_bbva")
+
 # -------------- Render pestañas --------------
 tabs = st.tabs([
     "PRE BCP-txt",
