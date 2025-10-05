@@ -194,19 +194,72 @@ def _extract_id_situ_pairs_from_pdf_text(text: str) -> dict:
                         pairs[i] = re.sub(r"\b\d{6,}\b", "", situ_val).strip()
     return pairs
 
-def _map_situacion_to_code_bbva(s: str) -> tuple[str, str]:
-    if s is None:
-        return "R002", CODE_DESC["R002"]
-    su = re.sub(r"\s+", " ", s.strip().upper())
-    for kw in BBVA_KEYWORDS["R001"]:
-        if kw in su:
+def _normalize_situ_text(s: str) -> str:
+    if not s:
+        return ""
+    t = str(s).upper().strip()
+    # reemplazos simples y limpieza
+    t = t.replace("�", " ")  # caracteres raros
+    t = t.replace("·", " ")
+    t = re.sub(r"[\u2018\u2019\u201C\u201D]", '"', t)
+    # normalizaciones OCR comunes si las necesitas (opcional)
+    t = t.replace(" O ", " 0 ")
+    t = t.replace("O ", "0 ")
+    t = t.replace(" O", " 0")
+    # eliminar signos de puntuación salvo barra y guion (que a veces separan campos)
+    t = re.sub(r"[\,\.\:\;\(\)\[\]\"]+", " ", t)
+    # colapsar espacios y trim
+    t = re.sub(r"\s+", " ", t).strip()
+    return t
+
+# listas ampliadas de alias (puedes añadir variantes reales que observes)
+_BBVA_ALIASES = {
+    "R001": [
+        "DOC NO CORRESPONDE", "DOCUMENTO NO CORRESPONDE", "DOCUMENTO ERRADO",
+        "DOC NO CORRESPONDE REVISAR", "DNI NO COINCIDE", "DOC NO CORRESPONDE"
+    ],
+    "R002": [
+        "CUENTA INEXISTENTE", "CTA C/ERR NO IDENTIF", "CUENTA CANCELADA",
+        "CUENTA NO EXISTE", "INEXISTENTE", "CUENTA NO ENCONTRADA"
+    ],
+    "R007": [
+        "REGISTRO CON ERRORES", "CUENTA NO ENCONTRADA", "RECHAZO POR CCI",
+        "CCI INVALIDA", "CCI INCORRECTA"
+    ],
+}
+
+# precompilar variantes normalizadas para buscar por subcadena
+_BBVA_ALIAS_NORM = {
+    code: [ _normalize_situ_text(a) for a in aliases ]
+    for code, aliases in _BBVA_ALIASES.items()
+}
+
+def _map_situacion_to_code_bbva(s: str, diag: bool = False) -> tuple[str, str]:
+    """
+    Mapea un texto de 'Situación' a (codigo, descripcion) usando aliases tolerantes.
+    Prioridad: R001 -> R007 -> R002. Devuelve pareja canonical definida en CODE_DESC.
+    Si diag=True, devuelve también impresión de diagnóstico a st.write (no usado en producción).
+    """
+    norm = _normalize_situ_text(s)
+    # prioridad R001
+    for alias in _BBVA_ALIAS_NORM["R001"]:
+        if alias in norm:
             return "R001", CODE_DESC["R001"]
-    for kw in BBVA_KEYWORDS["R007"]:
-        if kw in su:
+    # prioridad R007
+    for alias in _BBVA_ALIAS_NORM["R007"]:
+        if alias in norm:
             return "R007", CODE_DESC["R007"]
-    for kw in BBVA_KEYWORDS["R002"]:
-        if kw in su:
+    # prioridad R002
+    for alias in _BBVA_ALIAS_NORM["R002"]:
+        if alias in norm:
             return "R002", CODE_DESC["R002"]
+    # fallback: si contiene la palabra 'DOC' preferir R001
+    if "DOC" in norm or "DOCUMENTO" in norm or "DNI" in norm:
+        return "R001", CODE_DESC["R001"]
+    # otro fallback: si contiene 'CUENTA' preferir R002
+    if "CUENTA" in norm:
+        return "R002", CODE_DESC["R002"]
+    # por defecto R002
     return "R002", CODE_DESC["R002"]
 # Helpers añadidos para BBVA (pega junto al resto de utilidades)
 ID_RE_PATTERN = re.compile(r"\b\d{6,9}\b")
