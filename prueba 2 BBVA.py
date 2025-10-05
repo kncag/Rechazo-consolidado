@@ -419,42 +419,135 @@ def tab_post_bcp_xlsx():
 
             _validate_and_post(df_out, "post_post_xlsx")
 
+# --- Reemplazar/insertar en tu streamlit_app.py: funciones utilitarias y tab_bbva actualizado ---
+
+# tolerancia ampliada para ids
+ID_RE_PATTERN = re.compile(r"\b\d{6,9}\b")
+
+def _find_situacion_column_in_df(df: pd.DataFrame) -> str | None:
+    """
+    Busca variantes comunes del encabezado 'situacion' (tildes, :, paréntesis, sufijos).
+    """
+    def norm(s: str) -> str:
+        return re.sub(r"[^\w]", "", str(s).strip().lower().replace("ó", "o").replace("í", "i"))
+    for col in df.columns:
+        n = norm(col)
+        if n == "situacion" or n.startswith("situacion"):
+            return col
+    # aceptar variantes con palabra situacion en cualquier parte
+    for col in df.columns:
+        if "situac" in str(col).lower():
+            return col
+    return None
+
+def _extract_id_situ_pairs_from_pdf_text(text: str) -> dict:
+    """
+    Heurística mejorada:
+    - buscar líneas que contengan 'situaci' (tolerante)
+    - buscar ids con el patrón ID_RE_PATTERN en la misma línea o en líneas adyacentes (-2..+2)
+    - devolver map id -> situacion_text (limpio)
+    """
+    pairs = {}
+    if not text:
+        return pairs
+    lines = [ln.rstrip() for ln in text.splitlines() if ln.strip()]
+    situ_pattern = re.compile(r"\bsituaci", flags=re.IGNORECASE)
+    for idx, ln in enumerate(lines):
+        if situ_pattern.search(ln):
+            # tomar parte después de ":" si existe
+            parts = re.split(r":", ln, maxsplit=1)
+            situ_val = parts[1].strip() if len(parts) > 1 else ln.strip()
+            ids_here = ID_RE_PATTERN.findall(ln)
+            if ids_here:
+                for i in ids_here:
+                    pairs[i] = situ_val
+                continue
+            # buscar ids en líneas cercanas
+            found = False
+            for rel in (-2, -1, 1, 2):
+                ni = idx + rel
+                if 0 <= ni < len(lines):
+                    ids_near = ID_RE_PATTERN.findall(lines[ni])
+                    if ids_near:
+                        for i in ids_near:
+                            pairs[i] = situ_val
+                        found = True
+                        break
+            if not found:
+                # intentar extraer id dentro de situ_val
+                ids_in_situ = ID_RE_PATTERN.findall(situ_val)
+                if ids_in_situ:
+                    for i in ids_in_situ:
+                        cleaned = re.sub(ID_RE_PATTERN, "", situ_val).strip()
+                        pairs[i] = cleaned
+    return pairs
+
+# Tab BBVA con diagnóstico
 def tab_bbva():
     st.header("BBVA")
     code_ui, desc_ui = select_code("bbva_code", "R002")
 
     pdf_file = st.file_uploader("PDF de DNIs (debe contener columna Situación)", type="pdf", key="bbva_pdf")
     ex_file = st.file_uploader("Excel masivo", type="xlsx", key="bbva_xls")
+    enable_diag = st.checkbox("Mostrar diagnósticos (texto extraído, encabezados, map id→situación)", value=True)
+
     if pdf_file and ex_file:
         with st.spinner("Procesando BBVA…"):
             pdf_bytes = pdf_file.read()
             text = _extract_text_from_pdf_bytes(pdf_bytes)
-            docs = set(re.findall(r"\b\d{6,}\b", text))
+
+            # Diagnóstico: mostrar texto parcial si está habilitado
+            if enable_diag:
+                st.subheader("Diagnóstico: texto extraído (primeros 8000 chars)")
+                st.text(text[:8000])
+
+            # líneas que contienen 'situaci' para inspección
+            situ_lines = [ln for ln in text.splitlines() if re.search(r"situa", ln, flags=re.IGNORECASE)]
+            if enable_diag:
+                st.subheader("Líneas detectadas con 'situaci'")
+                st.write(situ_lines[:50])
+
+            docs = set(ID_RE_PATTERN.findall(text))
 
             df_raw = pd.read_excel(ex_file, dtype=str)
             if not docs:
                 st.error("No se detectaron identificadores en el PDF. Adjunte un PDF válido.")
+                if enable_diag:
+                    st.warning("IDs detectados: [] -- revise el texto extraído arriba.")
                 return
 
             mask = df_raw.astype(str).apply(lambda col: col.isin(docs)).any(axis=1)
             df_temp = df_raw.loc[mask].reset_index(drop=True)
             if df_temp.empty:
                 st.warning("No se encontraron filas en el Excel que coincidan con los identificadores del PDF.")
+                if enable_diag:
+                    st.write("IDs detectados:", sorted(list(docs))[:50])
+                    st.write("Encabezados Excel:", list(df_raw.columns))
                 return
 
-            # Extraer pares id->situacion desde el PDF (preferible)
+            if enable_diag:
+                st.subheader("Encabezados del DataFrame filtrado (df_temp)")
+                st.write(list(df_temp.columns))
+
+            # Extraer id->situacion desde el PDF (preferible)
             id_situ_map = _extract_id_situ_pairs_from_pdf_text(text)
+            if enable_diag:
+                st.subheader("Mapa id -> situacion detectado")
+                st.write(id_situ_map)
 
             # Si no hay pares, intentar columna 'Situación' en el Excel filtrado
             situ_col = _find_situacion_column_in_df(df_temp)
+            if enable_diag:
+                st.write("Columna 'Situación' detectada en df_temp:", situ_col)
+
             situaciones_alineadas = []
             situ_source = None
             if id_situ_map:
-                situaciones_alineadas = []
+                # asignar situacion por matching de identificador en cada fila del df_temp
                 for _, row in df_temp.iterrows():
                     matched = ""
                     for cell in row.astype(str).values:
-                        ids_here = re.findall(r"\b\d{6,}\b", cell)
+                        ids_here = ID_RE_PATTERN.findall(cell)
                         found_id = None
                         for iid in ids_here:
                             if iid in id_situ_map:
@@ -469,9 +562,17 @@ def tab_bbva():
                 situaciones_alineadas = df_temp[situ_col].astype(str).fillna("").tolist()
                 situ_source = "excel_column"
             else:
+                # diagnóstico final antes de abortar
                 st.error("No se encontró la columna 'Situación' en el Excel filtrado ni pares identificador→situación en el PDF. El PDF debe contener la columna 'Situación'.")
+                if enable_diag:
+                    st.info("Diagnóstico resumen:")
+                    st.write("- IDs detectados:", sorted(list(docs))[:50])
+                    st.write("- Líneas con 'situaci' (muestras):", situ_lines[:20])
+                    st.write("- Encabezados df_temp:", list(df_temp.columns))
+                    st.write("- id_situ_map (size):", len(id_situ_map))
                 return
 
+            # Alineamiento de longitud
             if len(situaciones_alineadas) < len(df_temp):
                 situaciones_alineadas += [""] * (len(df_temp) - len(situaciones_alineadas))
             situaciones_alineadas = situaciones_alineadas[: len(df_temp)]
@@ -486,7 +587,7 @@ def tab_bbva():
                 "importe": df_temp.iloc[:, 12].apply(parse_amount) if df_temp.shape[1] > 12 else pd.Series([0.0] * len(df_temp)),
                 "Referencia": ref_out,
             })
-            st.text(_extract_text_from_pdf_bytes(pdf_bytes)[:4000])
+
             # Mapear situación a código y descripción estandarizados
             cods = []
             descs = []
@@ -515,7 +616,7 @@ def tab_bbva():
             st.download_button(
                 "Descargar excel de registros",
                 eb,
-                file_name="bbva_rechazos.xlsx",
+                file_name="bbva_rechazos_diagnostic.xlsx",
                 mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
             )
 
