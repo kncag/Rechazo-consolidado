@@ -69,6 +69,7 @@ SUBSET_COLS = [
 ]
 
 # -------------- Utilidades --------------
+def st.text(_extract_text_from_pdf_bytes(pdf_bytes)[:4000])
 def parse_amount(raw) -> float:
     if raw is None:
         return 0.0
