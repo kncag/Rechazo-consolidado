@@ -208,6 +208,117 @@ def _map_situacion_to_code_bbva(s: str) -> tuple[str, str]:
         if kw in su:
             return "R002", CODE_DESC["R002"]
     return "R002", CODE_DESC["R002"]
+# Helpers añadidos para BBVA (pega junto al resto de utilidades)
+ID_RE_PATTERN = re.compile(r"\b\d{6,9}\b")
+IMPORTE_RE = re.compile(r"\b\d{1,3}(?:[\.,]\d{3})*(?:[\.,]\d{2})\b")  # 1.234,56 ó 1234.56 ó 30.00
+
+def _reconstruct_rows_from_pdf_text(text: str) -> list[dict]:
+    """
+    Heurística para reconstruir filas tabulares desde el texto extraído del PDF.
+    Devuelve una lista de dicts con posibles campos: { 'no', 'cuenta', 'titular', 'docident', 'moneda', 'importe', 'situacion' }.
+    La función:
+    - localiza la línea de cabecera (contiene 'Cuenta' y 'Situación' o 'Doc.Identidad'),
+    - agrupa líneas siguientes en bloques por detección de índice secuencial o patrón de cuenta/ID/importe,
+    - intenta extraer dni/identificador e importe y la última columna como 'situacion'.
+    """
+    rows = []
+    if not text:
+        return rows
+    lines = [ln.strip() for ln in text.splitlines() if ln.strip()]
+
+    # localizar índice de cabecera
+    header_idx = None
+    for i, ln in enumerate(lines):
+        low = ln.lower()
+        if ("cuenta" in low and "situac" in low) or ("doc.identidad" in low) or ("doc.identidad" in low.replace(" ", "")):
+            header_idx = i
+            break
+    if header_idx is None:
+        # fallback: buscar la primera línea con 'Situación' sola
+        for i, ln in enumerate(lines):
+            if re.search(r"situa", ln, flags=re.IGNORECASE):
+                header_idx = i
+                break
+    if header_idx is None:
+        return rows
+
+    # considerar las líneas que siguen a la cabecera como cuerpo de tabla
+    body = lines[header_idx + 1 :]
+
+    # heurística de agrupamiento: cada fila suele contener un número de registro al inicio
+    buffer = []
+    def flush_buffer(buf):
+        if not buf:
+            return None
+        text_block = " ".join(buf)
+        # extraer campos
+        no_match = re.search(r"\b(\d{1,4})\b", buf[0])  # primer token posible es No.
+        no = no_match.group(1) if no_match else ""
+        # dni/identificador
+        ids = ID_RE_PATTERN.findall(text_block)
+        docident = ids[0] if ids else ""
+        # importe: buscar última ocurrencia
+        imps = IMPORTE_RE.findall(text_block)
+        importe = imps[-1] if imps else ""
+        # situacion: tomar la última token en mayúsculas o palabras conocidas tras importe
+        situ = ""
+        # intentar tomar lo que viene después del importe en el bloque
+        if importe:
+            parts = re.split(re.escape(importe), text_block, maxsplit=1)
+            situ_candidate = parts[1].strip() if len(parts) > 1 else ""
+            # limpiar posibles separadores
+            situ = situ_candidate.split()[:8]  # límite longitud
+            situ = " ".join(situ).strip()
+        # si no hay importe, intentar detectar palabra clave situacion al final
+        if not situ:
+            # heurística simple: últimas palabras en mayúsculas
+            tail = text_block.split()[-6:]
+            tail_join = " ".join(tail)
+            if any(k.lower() in tail_join.lower() for k in ["DOCUMENTO", "CUENTA", "DOC.", "CANCELADA", "ERRADO", "INEXISTENTE", "REGISTRO"]):
+                situ = tail_join
+        return {
+            "no": no,
+            "docident": docident,
+            "importe": importe,
+            "situacion": situ,
+            "raw": text_block,
+        }
+
+    # agrupar líneas en bloques: si la línea comienza con número de fila -> nuevo bloque
+    for ln in body:
+        if re.match(r"^\d+\s*$", ln):  # línea que es solo número -> inicio de nuevo bloque
+            if buffer:
+                rec = flush_buffer(buffer)
+                if rec:
+                    rows.append(rec)
+                buffer = [ln]
+            else:
+                buffer = [ln]
+            continue
+        # línea que parece inicio de cuenta: contiene guiones tipo 0011-0814-02
+        if re.search(r"\d{4}-\d{4}-\d{2}", ln):
+            if buffer:
+                rec = flush_buffer(buffer)
+                if rec:
+                    rows.append(rec)
+                buffer = [ln]
+                continue
+        # si la línea contiene patrón de importe y buffer no vacío -> probablemente fin de fila
+        if IMPORTE_RE.search(ln) and buffer:
+            buffer.append(ln)
+            rec = flush_buffer(buffer)
+            if rec:
+                rows.append(rec)
+            buffer = []
+            continue
+        # agregar línea al buffer
+        buffer.append(ln)
+    # flush final
+    if buffer:
+        rec = flush_buffer(buffer)
+        if rec:
+            rows.append(rec)
+    return rows
 
 # -------------- Flujos --------------
 def tab_pre_bcp_xlsx():
@@ -488,31 +599,36 @@ def tab_bbva():
 
     pdf_file = st.file_uploader("PDF de DNIs (debe contener columna Situación)", type="pdf", key="bbva_pdf")
     ex_file = st.file_uploader("Excel masivo", type="xlsx", key="bbva_xls")
-    enable_diag = st.checkbox("Mostrar diagnósticos (texto extraído, encabezados, map id→situación)", value=True)
+    enable_diag = st.checkbox("Mostrar diagnósticos (texto extraído, encabezados, map id→situación, filas reconstruidas)", value=True)
 
     if pdf_file and ex_file:
         with st.spinner("Procesando BBVA…"):
             pdf_bytes = pdf_file.read()
             text = _extract_text_from_pdf_bytes(pdf_bytes)
 
-            # Diagnóstico: mostrar texto parcial si está habilitado
             if enable_diag:
                 st.subheader("Diagnóstico: texto extraído (primeros 8000 chars)")
                 st.text(text[:8000])
 
-            # líneas que contienen 'situaci' para inspección
-            situ_lines = [ln for ln in text.splitlines() if re.search(r"situa", ln, flags=re.IGNORECASE)]
+            # intentar reconstruir filas tabulares desde texto del PDF
+            reconstructed = _reconstruct_rows_from_pdf_text(text)
             if enable_diag:
-                st.subheader("Líneas detectadas con 'situaci'")
-                st.write(situ_lines[:50])
+                st.subheader("Filas reconstruidas (muestras, primero 20)")
+                st.write(reconstructed[:20])
 
-            docs = set(ID_RE_PATTERN.findall(text))
+            # extraer ids detectados en el texto completo y en filas reconstruidas
+            ids_from_text = set(ID_RE_PATTERN.findall(text))
+            ids_from_rows = set(r["docident"] for r in reconstructed if r.get("docident"))
+            if enable_diag:
+                st.write("IDs detectados en texto (muestra):", sorted(list(ids_from_text))[:50])
+                st.write("IDs detectados en filas reconstruidas (muestra):", sorted(list(ids_from_rows))[:50])
+
+            # preferir ids extraidos de filas reconstruidas; si vacío, usar ids_from_text
+            docs = ids_from_rows if ids_from_rows else ids_from_text
 
             df_raw = pd.read_excel(ex_file, dtype=str)
             if not docs:
-                st.error("No se detectaron identificadores en el PDF. Adjunte un PDF válido.")
-                if enable_diag:
-                    st.warning("IDs detectados: [] -- revise el texto extraído arriba.")
+                st.error("No se detectaron identificadores en el PDF tras reconstrucción. Adjunte un PDF válido o habilite OCR.")
                 return
 
             mask = df_raw.astype(str).apply(lambda col: col.isin(docs)).any(axis=1)
@@ -528,13 +644,24 @@ def tab_bbva():
                 st.subheader("Encabezados del DataFrame filtrado (df_temp)")
                 st.write(list(df_temp.columns))
 
-            # Extraer id->situacion desde el PDF (preferible)
-            id_situ_map = _extract_id_situ_pairs_from_pdf_text(text)
+            # construir id->situacion preferente desde filas reconstruidas (si disponibles)
+            id_situ_map = {}
+            for r in reconstructed:
+                if r.get("docident"):
+                    id_situ_map[r["docident"]] = r.get("situacion", "").strip()
+
             if enable_diag:
-                st.subheader("Mapa id -> situacion detectado")
+                st.subheader("Mapa id -> situacion detectado (desde filas reconstruidas)")
                 st.write(id_situ_map)
 
-            # Si no hay pares, intentar columna 'Situación' en el Excel filtrado
+            # si no hay id->situacion desde filas reconstruidas, intentar heurística anterior (buscar 'situaci' y id cercanos)
+            if not id_situ_map:
+                id_situ_map = _extract_id_situ_pairs_from_pdf_text(text)
+                if enable_diag:
+                    st.subheader("Mapa id -> situacion detectado (fallback heurística)")
+                    st.write(id_situ_map)
+
+            # intentar situ_column en Excel filtrado como respaldo (siempre preferir id map)
             situ_col = _find_situacion_column_in_df(df_temp)
             if enable_diag:
                 st.write("Columna 'Situación' detectada en df_temp:", situ_col)
@@ -542,36 +669,33 @@ def tab_bbva():
             situaciones_alineadas = []
             situ_source = None
             if id_situ_map:
-                # asignar situacion por matching de identificador en cada fila del df_temp
                 for _, row in df_temp.iterrows():
                     matched = ""
                     for cell in row.astype(str).values:
                         ids_here = ID_RE_PATTERN.findall(cell)
-                        found_id = None
+                        found = None
                         for iid in ids_here:
                             if iid in id_situ_map:
-                                found_id = iid
+                                found = iid
                                 break
-                        if found_id:
-                            matched = id_situ_map.get(found_id, "")
+                        if found:
+                            matched = id_situ_map.get(found, "")
                             break
                     situaciones_alineadas.append(matched)
-                situ_source = "pdf_pairs"
+                situ_source = "pdf_reconstructed_pairs"
             elif situ_col:
                 situaciones_alineadas = df_temp[situ_col].astype(str).fillna("").tolist()
                 situ_source = "excel_column"
             else:
-                # diagnóstico final antes de abortar
-                st.error("No se encontró la columna 'Situación' en el Excel filtrado ni pares identificador→situación en el PDF. El PDF debe contener la columna 'Situación'.")
+                st.error("No se encontró 'Situación' tras reconstrucción ni pares identificador→situación confiables. El PDF debe contener la columna 'Situación' legible.")
                 if enable_diag:
                     st.info("Diagnóstico resumen:")
-                    st.write("- IDs detectados:", sorted(list(docs))[:50])
-                    st.write("- Líneas con 'situaci' (muestras):", situ_lines[:20])
+                    st.write("- IDs detectados (rows/text):", sorted(list(ids_from_rows or ids_from_text))[:50])
+                    st.write("- Filas reconstruidas:", len(reconstructed))
                     st.write("- Encabezados df_temp:", list(df_temp.columns))
-                    st.write("- id_situ_map (size):", len(id_situ_map))
                 return
 
-            # Alineamiento de longitud
+            # normalizar longitud y formar df_out
             if len(situaciones_alineadas) < len(df_temp):
                 situaciones_alineadas += [""] * (len(df_temp) - len(situaciones_alineadas))
             situaciones_alineadas = situaciones_alineadas[: len(df_temp)]
@@ -615,11 +739,12 @@ def tab_bbva():
             st.download_button(
                 "Descargar excel de registros",
                 eb,
-                file_name="bbva_rechazos_diagnostic.xlsx",
+                file_name="bbva_rechazos_reconstructed.xlsx",
                 mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
             )
 
             _validate_and_post(df_out, "post_bbva")
+
 
 # -------------- Render pestañas --------------
 tabs = st.tabs([
