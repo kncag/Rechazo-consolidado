@@ -13,6 +13,7 @@ except ImportError:
     fitz = None
 
 # -------------- Configuración --------------
+st.text(_extract_text_from_pdf_bytes(pdf_bytes)[:4000])
 st.set_page_config(layout="centered", page_title="Rechazos MASIVOS Unificado")
 
 ENDPOINT = "https://q6caqnpy09.execute-api.us-east-1.amazonaws.com/OPS/kpayout/v1/payout_process/reject_invoices_batch"
@@ -69,7 +70,6 @@ SUBSET_COLS = [
 ]
 
 # -------------- Utilidades --------------
-def st.text(_extract_text_from_pdf_bytes(pdf_bytes)[:4000])
 def parse_amount(raw) -> float:
     if raw is None:
         return 0.0
