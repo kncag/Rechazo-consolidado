@@ -103,16 +103,18 @@ def map_situacion_to_code(s: str) -> Tuple[str, str]:
     # limpieza y normalización segura en una sola cadena
     txt = re.sub(r"[\,\.\:\;\(\)
 
-\[\]
+[\]
 
 \"]+", " ", str(s).upper()).strip()
     txt = re.sub(r"\s+", " ", txt)
+    # Reglas por prioridad
     if any(k in txt for k in ("DOC NO CORRESPONDE", "DOCUMENTO ERRADO", "DNI NO COINCIDE", "DOCUMENTO NO CORRESPONDE")):
         return "R001", CODE_DESC["R001"]
     if any(k in txt for k in ("REGISTRO CON ERRORES", "RECHAZO POR CCI", "CCI INVALIDA", "CCI INCORRECTA")):
         return "R007", CODE_DESC["R007"]
     if any(k in txt for k in ("CUENTA INEXISTENTE", "CTA C/ERR NO IDENTIF", "CUENTA CANCELADA", "CUENTA NO ENCONTRADA", "CUENTA NO EXISTE")):
         return "R002", CODE_DESC["R002"]
+    # Fallbacks por palabra clave
     if "DOC" in txt or "DOCUMENTO" in txt or "DNI" in txt:
         return "R001", CODE_DESC["R001"]
     if "CUENTA" in txt:
