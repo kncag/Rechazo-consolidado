@@ -100,6 +100,7 @@ def find_situacion_column(df: pd.DataFrame) -> Optional[str]:
 def map_situacion_to_code(s: str) -> Tuple[str, str]:
     if not s:
         return "R002", CODE_DESC["R002"]
+    # limpieza y normalización segura en una sola cadena
     txt = re.sub(r"[\,\.\:\;\(\)
 
 \[\]
