@@ -103,7 +103,7 @@ def map_situacion_to_code(s: str) -> Tuple[str, str]:
     # limpieza y normalización segura en una sola cadena
     txt = re.sub(r"[\,\.\:\;\(\)
 
-[\]
+\[\]
 
 \"]+", " ", str(s).upper()).strip()
     txt = re.sub(r"\s+", " ", txt)
@@ -120,6 +120,7 @@ def map_situacion_to_code(s: str) -> Tuple[str, str]:
     if "CUENTA" in txt:
         return "R002", CODE_DESC["R002"]
     return "R002", CODE_DESC["R002"]
+
 
 # -------------------- Handler de envío (RECH) --------------------
 def rech_post_handler(df: pd.DataFrame, feedback: Optional[Callable[[str, str], None]] = None) -> Tuple[bool, str]:
