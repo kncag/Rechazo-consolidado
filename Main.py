@@ -1,4 +1,4 @@
-# streamlit_app_clean.py
+# Main.py - Versión parchada y optimizada (botones RECH con keys únicas)
 
 import io
 import re
@@ -47,7 +47,6 @@ IMPORTE_RE = re.compile(r"\b\d{1,3}(?:[\.,]\d{3})*(?:[\.,]\d{2})\b")
 
 # -------------------- Utilidades generales --------------------
 def parse_amount(raw: Optional[str]) -> float:
-    """Normaliza una cadena numérica y la convierte a float; silencia errores y retorna 0.0."""
     if raw is None:
         return 0.0
     s = re.sub(r"[^\d,.-]", "", str(raw))
@@ -64,14 +63,12 @@ def parse_amount(raw: Optional[str]) -> float:
         return 0.0
 
 def df_to_excel_bytes(df: pd.DataFrame) -> bytes:
-    """Convierte DataFrame a bytes Excel (.xlsx) usando openpyxl."""
     buf = io.BytesIO()
     with pd.ExcelWriter(buf, engine="openpyxl") as writer:
         df.to_excel(writer, index=False, sheet_name="Rechazos")
     return buf.getvalue()
 
 def post_to_endpoint(excel_bytes: bytes, timeout: int = 30) -> Tuple[int, str]:
-    """Envía multipart/form-data al ENDPOINT y devuelve (status_code, text)."""
     files = {
         "edt": ("rechazos.xlsx", excel_bytes, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
     }
@@ -80,7 +77,6 @@ def post_to_endpoint(excel_bytes: bytes, timeout: int = 30) -> Tuple[int, str]:
 
 # -------------------- Extracción de texto PDF --------------------
 def extract_text_from_pdf(pdf_bytes: bytes) -> str:
-    """Extrae texto con PyMuPDF cuando está disponible, retorna cadena vacía si falla."""
     if fitz is None:
         return ""
     try:
@@ -91,7 +87,6 @@ def extract_text_from_pdf(pdf_bytes: bytes) -> str:
 
 # -------------------- Heurísticas y mapeo --------------------
 def find_situacion_column(df: pd.DataFrame) -> Optional[str]:
-    """Detecta columna 'Situación' tolerante a tildes, mayúsculas y sufijos."""
     def norm(col: str) -> str:
         return re.sub(r"[^\w]", "", str(col).strip().lower().replace("ó", "o").replace("í", "i"))
     for c in df.columns:
@@ -103,19 +98,16 @@ def find_situacion_column(df: pd.DataFrame) -> Optional[str]:
     return None
 
 def map_situacion_to_code(s: str) -> Tuple[str, str]:
-    """Mapea texto situacion a (codigo, descripcion) usando reglas de prioridad."""
     if not s:
         return "R002", CODE_DESC["R002"]
     txt = re.sub(r"[\,\.\:\;\(\)\[\]\"]+", " ", str(s).upper()).strip()
     txt = re.sub(r"\s+", " ", txt)
-    # Prioridad: documentos -> CCI -> cuenta
-    if any(k in txt for k in ("DOC NO CORRESPONDE", "DOCUMENTO ERRADO", "DOC NO CORRESPONDE", "DNI NO COINCIDE", "DOCUMENTO NO CORRESPONDE")):
+    if any(k in txt for k in ("DOC NO CORRESPONDE", "DOCUMENTO ERRADO", "DNI NO COINCIDE", "DOCUMENTO NO CORRESPONDE")):
         return "R001", CODE_DESC["R001"]
-    if any(k in txt for k in ("REGISTRO CON ERRORES", "RECHAZO POR CCI", "CCI", "CCI INVALIDA", "CCI INCORRECTA")):
+    if any(k in txt for k in ("REGISTRO CON ERRORES", "RECHAZO POR CCI", "CCI INVALIDA", "CCI INCORRECTA")):
         return "R007", CODE_DESC["R007"]
     if any(k in txt for k in ("CUENTA INEXISTENTE", "CTA C/ERR NO IDENTIF", "CUENTA CANCELADA", "CUENTA NO ENCONTRADA", "CUENTA NO EXISTE")):
         return "R002", CODE_DESC["R002"]
-    # Fallback por palabras clave
     if "DOC" in txt or "DOCUMENTO" in txt or "DNI" in txt:
         return "R001", CODE_DESC["R001"]
     if "CUENTA" in txt:
@@ -124,11 +116,6 @@ def map_situacion_to_code(s: str) -> Tuple[str, str]:
 
 # -------------------- Handler de envío (RECH) --------------------
 def rech_post_handler(df: pd.DataFrame, feedback: Optional[Callable[[str, str], None]] = None) -> Tuple[bool, str]:
-    """
-    Valida y envía df al endpoint.
-    feedback(level, message) opcional: level in {'success','error','info'}.
-    Retorna (ok, mensaje).
-    """
     def fb(level: str, msg: str):
         if feedback:
             try:
@@ -163,17 +150,29 @@ def rech_post_handler(df: pd.DataFrame, feedback: Optional[Callable[[str, str], 
     fb("error", msg)
     return False, msg
 
-# -------------------- Pestañas (Flujos) --------------------
+# -------------------- Helper de UI para botón RECH (evita IDs duplicados) --------------------
+def rech_button_and_send(df: pd.DataFrame, key: str, label: str = "RECH-POSTMAN") -> None:
+    """
+    Muestra un botón con key único y en caso de click envía df con rech_post_handler.
+    key: key única por botón (por ejemplo 'rech_postman_tabname').
+    """
+    if st.button(label, key=key):
+        ok, msg = rech_post_handler(df, feedback=lambda lvl, m: getattr(st, lvl)(m))
+        if ok:
+            st.success("Envío completado correctamente.")
+        else:
+            st.error(f"Envío fallido: {msg}")
+
+# -------------------- UI y pestañas (Flujos) --------------------
 def _select_code_ui(key: str, default: str = "R002") -> Tuple[str, str]:
-    """UI para seleccionar código por defecto (conserva en session_state)."""
     if key not in st.session_state:
         st.session_state[key] = default
-    col1, col2, col3 = st.columns(3)
-    if col1.button("R001\nDOCUMENTO ERRADO", key=f"{key}_r001"):
+    c1, c2, c3 = st.columns(3)
+    if c1.button("R001\nDOCUMENTO ERRADO", key=f"{key}_r001"):
         st.session_state[key] = "R001"
-    if col2.button("R002\nCUENTA INVALIDA", key=f"{key}_r002"):
+    if c2.button("R002\nCUENTA INVALIDA", key=f"{key}_r002"):
         st.session_state[key] = "R002"
-    if col3.button("R007\nRECHAZO POR CCI", key=f"{key}_r007"):
+    if c3.button("R007\nRECHAZO POR CCI", key=f"{key}_r007"):
         st.session_state[key] = "R007"
     code = st.session_state[key]
     return code, CODE_DESC.get(code, "CUENTA INVALIDA")
@@ -220,12 +219,7 @@ def tab_pre_bcp_xlsx():
     st.write(f"Total transacciones: {cnt} | Suma importes: {total:,.2f}")
     st.dataframe(df_out)
 
-    if st.button("RECH-POSTMAN"):
-        ok, msg = rech_post_handler(df_out, feedback=lambda lvl, m: getattr(st, lvl)(m))
-        if ok:
-            st.success("Envío completado correctamente.")
-        else:
-            st.error(f"Envío fallido: {msg}")
+    rech_button_and_send(df_out, key="rech_postman_pre_bcp_xlsx")
 
 def tab_pre_bcp_txt():
     st.header("PRE BCP-txt")
@@ -240,7 +234,7 @@ def tab_pre_bcp_txt():
     text = extract_text_from_pdf(pdf_bytes)
     regs = sorted({int(m) for m in re.findall(r"Registro\s+(\d{1,5})", text)})
     lines = txt_file.read().decode("utf-8", errors="ignore").splitlines()
-    indices = sorted({r * 2 for r in regs})  # multiplicador fijo según lógica previa
+    indices = sorted({r * 2 for r in regs})
 
     rows = []
     for i in indices:
@@ -265,12 +259,7 @@ def tab_pre_bcp_txt():
     st.write(f"Total transacciones: {cnt} | Suma importes: {total:,.2f}")
     st.dataframe(df_out)
 
-    if st.button("RECH-POSTMAN"):
-        ok, msg = rech_post_handler(df_out, feedback=lambda lvl, m: getattr(st, lvl)(m))
-        if ok:
-            st.success("Envío completado correctamente.")
-        else:
-            st.error(f"Envío fallido: {msg}")
+    rech_button_and_send(df_out, key="rech_postman_pre_bcp_txt")
 
 def tab_rechazo_ibk():
     st.header("Rechazo IBK")
@@ -306,12 +295,7 @@ def tab_rechazo_ibk():
     st.write(f"Total transacciones: {cnt} | Suma importes: {total:,.2f}")
     st.dataframe(df_out)
 
-    if st.button("RECH-POSTMAN"):
-        ok, msg = rech_post_handler(df_out, feedback=lambda lvl, m: getattr(st, lvl)(m))
-        if ok:
-            st.success("Envío completado correctamente.")
-        else:
-            st.error(f"Envío fallido: {msg}")
+    rech_button_and_send(df_out, key="rech_postman_ibk")
 
 def tab_post_bcp_xlsx():
     st.header("POST BCP-xlsx")
@@ -355,12 +339,7 @@ def tab_post_bcp_xlsx():
     st.write(f"Total transacciones: {cnt} | Suma importes: {total:,.2f}")
     st.dataframe(df_out)
 
-    if st.button("RECH-POSTMAN"):
-        ok, msg = rech_post_handler(df_out, feedback=lambda lvl, m: getattr(st, lvl)(m))
-        if ok:
-            st.success("Envío completado correctamente.")
-        else:
-            st.error(f"Envío fallido: {msg}")
+    rech_button_and_send(df_out, key="rech_postman_post_bcp_xlsx")
 
 # -------------------- Render pestañas --------------------
 def main():
