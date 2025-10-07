@@ -1,4 +1,4 @@
-# Main.py - Versión parchada y optimizada (botones RECH con keys únicas)
+# Main.py - Versión parchada con botón "Descarga" en cada pestaña
 
 import io
 import re
@@ -100,7 +100,11 @@ def find_situacion_column(df: pd.DataFrame) -> Optional[str]:
 def map_situacion_to_code(s: str) -> Tuple[str, str]:
     if not s:
         return "R002", CODE_DESC["R002"]
-    txt = re.sub(r"[\,\.\:\;\(\)\[\]\"]+", " ", str(s).upper()).strip()
+    txt = re.sub(r"[\,\.\:\;\(\)
+
+\[\]
+
+\"]+", " ", str(s).upper()).strip()
     txt = re.sub(r"\s+", " ", txt)
     if any(k in txt for k in ("DOC NO CORRESPONDE", "DOCUMENTO ERRADO", "DNI NO COINCIDE", "DOCUMENTO NO CORRESPONDE")):
         return "R001", CODE_DESC["R001"]
@@ -152,16 +156,23 @@ def rech_post_handler(df: pd.DataFrame, feedback: Optional[Callable[[str, str], 
 
 # -------------------- Helper de UI para botón RECH (evita IDs duplicados) --------------------
 def rech_button_and_send(df: pd.DataFrame, key: str, label: str = "RECH-POSTMAN") -> None:
-    """
-    Muestra un botón con key único y en caso de click envía df con rech_post_handler.
-    key: key única por botón (por ejemplo 'rech_postman_tabname').
-    """
     if st.button(label, key=key):
         ok, msg = rech_post_handler(df, feedback=lambda lvl, m: getattr(st, lvl)(m))
         if ok:
             st.success("Envío completado correctamente.")
         else:
             st.error(f"Envío fallido: {msg}")
+
+# -------------------- Helper de UI para botón Descarga (evita IDs duplicados) --------------------
+def download_button_for_df(df: pd.DataFrame, key: str, filename: str) -> None:
+    excel_bytes = df_to_excel_bytes(df)
+    st.download_button(
+        label="Descarga",
+        data=excel_bytes,
+        file_name=filename,
+        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        key=key,
+    )
 
 # -------------------- UI y pestañas (Flujos) --------------------
 def _select_code_ui(key: str, default: str = "R002") -> Tuple[str, str]:
@@ -219,6 +230,8 @@ def tab_pre_bcp_xlsx():
     st.write(f"Total transacciones: {cnt} | Suma importes: {total:,.2f}")
     st.dataframe(df_out)
 
+    # Descarga y envío (keys únicas por pestaña)
+    download_button_for_df(df_out, key="download_pre_bcp_xlsx", filename=f"pre_bcp_preview_{pd.Timestamp.now().strftime('%Y%m%d_%H%M%S')}.xlsx")
     rech_button_and_send(df_out, key="rech_postman_pre_bcp_xlsx")
 
 def tab_pre_bcp_txt():
@@ -259,6 +272,7 @@ def tab_pre_bcp_txt():
     st.write(f"Total transacciones: {cnt} | Suma importes: {total:,.2f}")
     st.dataframe(df_out)
 
+    download_button_for_df(df_out, key="download_pre_bcp_txt", filename=f"pre_bcp_txt_preview_{pd.Timestamp.now().strftime('%Y%m%d_%H%M%S')}.xlsx")
     rech_button_and_send(df_out, key="rech_postman_pre_bcp_txt")
 
 def tab_rechazo_ibk():
@@ -295,6 +309,7 @@ def tab_rechazo_ibk():
     st.write(f"Total transacciones: {cnt} | Suma importes: {total:,.2f}")
     st.dataframe(df_out)
 
+    download_button_for_df(df_out, key="download_rechazo_ibk", filename=f"rechazo_ibk_preview_{pd.Timestamp.now().strftime('%Y%m%d_%H%M%S')}.xlsx")
     rech_button_and_send(df_out, key="rech_postman_ibk")
 
 def tab_post_bcp_xlsx():
@@ -339,6 +354,7 @@ def tab_post_bcp_xlsx():
     st.write(f"Total transacciones: {cnt} | Suma importes: {total:,.2f}")
     st.dataframe(df_out)
 
+    download_button_for_df(df_out, key="download_post_bcp_xlsx", filename=f"post_bcp_preview_{pd.Timestamp.now().strftime('%Y%m%d_%H%M%S')}.xlsx")
     rech_button_and_send(df_out, key="rech_postman_post_bcp_xlsx")
 
 # -------------------- Render pestañas --------------------
