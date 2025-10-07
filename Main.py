@@ -209,4 +209,37 @@ def tab_pre_bcp_txt():
         indices = sorted({r * MULT for r in regs})
 
         rows = []
-        for i
+        for i in indices:
+            if 1 <= i <= len(lines):
+                ln = lines[i - 1]
+                dni = slice_fixed(ln, *TXT_POS["dni"])
+                nombre = slice_fixed(ln, *TXT_POS["nombre"])
+                ref = slice_fixed(ln, *TXT_POS["referencia"])
+                imp = parse_amount(slice_fixed(ln, *TXT_POS["importe"]))
+            else:
+                dni = nombre = ref = ""
+                imp = 0.0
+            rows.append({
+                "dni/cex": dni,
+                "nombre": nombre,
+                "importe": imp,
+                "Referencia": ref,
+            })
+
+        if not rows:
+            df_out = pd.DataFrame(columns=["dni/cex", "nombre", "importe", "Referencia"])
+        else:
+            df_out = pd.DataFrame(rows)
+        df_out = df_out.reindex(columns=["dni/cex", "nombre", "importe", "Referencia"])
+
+        df_out["Estado"] = ESTADO
+        df_out["Codigo de Rechazo"] = code
+        df_out["Descripcion de Rechazo"] = desc
+        df_out = df_out[OUT_COLS]
+
+        render_preview_and_actions(
+            df_out,
+            "download_pre_bcp_txt",
+            f"pre_bcp_txt_{pd.Timestamp.now().strftime('%Y%m%d_%H%M%S')}.xlsx",
+            "post_pre_txt"
+        )
