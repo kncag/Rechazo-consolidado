@@ -27,7 +27,6 @@ TXT_POS = {
 ESTADO = "rechazada"
 MULT = 2
 
-# Tipos globales
 CODE_DESC = {
     "R001": "DOCUMENTO ERRADO",
     "R002": "CUENTA INVALIDA",
@@ -39,9 +38,6 @@ KEYWORDS_NO_TIT = [
     "beneficiario no",
     "cliente no titular",
     "no titular",
-    "continuar",
-    "puedes continuar",
-    "si deseas, puedes continuar",
 ]
 
 OUT_COLS = [
@@ -98,8 +94,20 @@ def post_to_endpoint(excel_bytes: bytes) -> tuple[int, str]:
             "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         )
     }
-    resp = requests.post(ENDPOINT, files=files)
-    return resp.status_code, resp.text
+    try:
+        resp = requests.post(ENDPOINT, files=files, timeout=30)
+        return resp.status_code, resp.text
+    except requests.RequestException as e:
+        return 0, f"Network error: {e}"
+
+def extract_text_from_pdf(pdf_bytes: bytes) -> str:
+    if fitz is None or pdf_bytes is None:
+        return ""
+    try:
+        doc = fitz.open(stream=io.BytesIO(pdf_bytes), filetype="pdf")
+        return "".join((p.get_text() or "") for p in doc)
+    except Exception:
+        return ""
 
 def select_code(key: str, default: str) -> tuple[str, str]:
     if key not in st.session_state:
@@ -126,38 +134,28 @@ def _validate_and_post(df: pd.DataFrame, button_key: str):
         payload = df[SUBSET_COLS]
         excel_bytes = df_to_excel_bytes(payload)
         status, resp = post_to_endpoint(excel_bytes)
-        st.success(f"{status}: {resp}")
+        if 200 <= status < 300:
+            st.success(f"{status}: {resp}")
+        else:
+            st.error(f"{status}: {resp}")
 
-def _count_and_sum(df: pd.DataFrame) -> tuple[int, float]:
-    cnt = len(df)
-    total = df["importe"].sum() if "importe" in df.columns else 0.0
-    return cnt, total
-
-def _find_situacion_column_in_df(df: pd.DataFrame) -> str | None:
-    def norm(s: str) -> str:
-        return re.sub(r"[^\w]", "", s.strip().lower().replace("ó", "o").replace("í", "i"))
-    for col in df.columns:
-        if norm(col) == "situacion":
-            return col
-    return None
-
-def _extract_situaciones_from_pdf(pdf_stream) -> list[str]:
-    text = "".join(p.get_text() or "" for p in fitz.open(stream=pdf_stream, filetype="pdf"))
-    lines = [ln.strip() for ln in text.splitlines() if ln.strip()]
-    situ_lines = [ln for ln in lines if re.search(r"\bsituaci[oó]n\b", ln, flags=re.IGNORECASE)]
-    return situ_lines
-
-def _map_situacion_to_code(s: str) -> tuple[str, str]:
-    if s is None:
-        return "R002", "CUENTA INVALIDA"
-    su = s.upper()
-    if "CUENTA INEXISTENTE" in su or "INEXISTENTE" in su:
-        return "R002", "CUENTA INEXISTENTE"
-    if "DOC. NO CORRESPONDE" in su or "DOCUMENTO NO CORRESPONDE" in su or "DOC NO CORRESPONDE" in su:
-        return "R001", "DOCUMENTO ERRADO"
-    if "CUENTA CANCELADA" in su or "CANCELADA" in su:
-        return "R002", "CUENTA CANCELADA"
-    return "R002", "CUENTA INVALIDA"
+def render_preview_and_actions(df_out: pd.DataFrame, download_key: str, download_name: str, post_key: str):
+    cnt = len(df_out)
+    total = df_out["importe"].sum() if "importe" in df_out.columns else 0.0
+    st.write(f"**Total transacciones:** {cnt}   |   **Suma de importes:** {total:,.2f}")
+    st.dataframe(df_out)
+    eb = df_to_excel_bytes(df_out)
+    c1, c2 = st.columns(2)
+    with c1:
+        st.download_button(
+            "Descargar excel de registros",
+            eb,
+            file_name=download_name,
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            key=download_key,
+        )
+    with c2:
+        _validate_and_post(df_out, post_key)
 
 # -------------- Flujos --------------
 def tab_pre_bcp_xlsx():
@@ -167,50 +165,35 @@ def tab_pre_bcp_xlsx():
     pdf_file = st.file_uploader("PDF con filas", type="pdf", key="pre_xlsx_pdf")
     ex_file = st.file_uploader("Excel masivo", type="xlsx", key="pre_xlsx_xls")
     if pdf_file and ex_file:
-        with st.spinner("Procesando PRE BCP-xlsx…"):
-            pdf_bytes = pdf_file.read()
-            text = "".join(p.get_text() or "" for p in fitz.open(stream=io.BytesIO(pdf_bytes), filetype="pdf"))
-            filas = sorted({int(n) + 1 for n in re.findall(r"Registro\s+(\d+)", text)})
+        pdf_bytes = pdf_file.read()
+        text = extract_text_from_pdf(pdf_bytes)
+        filas = sorted({int(n) + 1 for n in re.findall(r"Registro\s+(\d+)", text)})
 
-            df_raw = pd.read_excel(ex_file, dtype=str)
-            if not filas:
-                st.warning("No se detectaron filas en el PDF con el patrón 'Registro N'.")
-                return
-            # proteger índices fuera de rango
-            filas_valid = [i for i in filas if 0 <= i - 1 < len(df_raw)]
-            if not filas_valid:
-                st.warning("Los índices detectados están fuera del rango del Excel.")
-                return
-            df_temp = df_raw.iloc[[i - 1 for i in filas_valid]].reset_index(drop=True)
+        df_raw = pd.read_excel(ex_file, dtype=str)
+        if not filas:
+            st.warning("No se detectaron filas en el PDF con el patrón 'Registro N'.")
+            return
+        filas_valid = [i for i in filas if 0 <= i - 1 < len(df_raw)]
+        if not filas_valid:
+            st.warning("Los índices detectados están fuera del rango del Excel.")
+            return
+        df_temp = df_raw.iloc[[i - 1 for i in filas_valid]].reset_index(drop=True)
 
-            ref_out = df_temp.iloc[:, 7] if df_temp.shape[1] > 7 else pd.Series([""] * len(df_temp))
-            nombre_out = df_temp.iloc[:, 3] if df_temp.shape[1] > 3 else (df_temp.iloc[:, 1] if df_temp.shape[1] > 1 else pd.Series([""] * len(df_temp)))
+        ref_out = df_temp.iloc[:, 7] if df_temp.shape[1] > 7 else pd.Series([""] * len(df_temp))
+        nombre_out = df_temp.iloc[:, 3] if df_temp.shape[1] > 3 else (df_temp.iloc[:, 1] if df_temp.shape[1] > 1 else pd.Series([""] * len(df_temp)))
 
-            df_out = pd.DataFrame({
-                "dni/cex": df_temp.iloc[:, 0],
-                "nombre": nombre_out,
-                "importe": df_temp.iloc[:, 12].apply(parse_amount) if df_temp.shape[1] > 12 else pd.Series([0.0] * len(df_temp)),
-                "Referencia": ref_out,
-            })
-            df_out["Estado"] = ESTADO
-            df_out["Codigo de Rechazo"] = code
-            df_out["Descripcion de Rechazo"] = desc
-            df_out = df_out[OUT_COLS]
+        df_out = pd.DataFrame({
+            "dni/cex": df_temp.iloc[:, 0],
+            "nombre": nombre_out,
+            "importe": df_temp.iloc[:, 12].apply(parse_amount) if df_temp.shape[1] > 12 else pd.Series([0.0] * len(df_temp)),
+            "Referencia": ref_out,
+        })
+        df_out["Estado"] = ESTADO
+        df_out["Codigo de Rechazo"] = code
+        df_out["Descripcion de Rechazo"] = desc
+        df_out = df_out[OUT_COLS]
 
-            cnt, total = _count_and_sum(df_out)
-            st.write(f"**Total transacciones:** {cnt}   |   **Suma de importes:** {total:,.2f}")
-
-            st.dataframe(df_out)
-
-            eb = df_to_excel_bytes(df_out)
-            st.download_button(
-                "Descargar excel de registros",
-                eb,
-                file_name="pre_bcp_xlsx.xlsx",
-                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-            )
-
-            _validate_and_post(df_out, "post_pre_xlsx")
+        render_preview_and_actions(df_out, "download_pre_bcp_xlsx", f"pre_bcp_xlsx_{pd.Timestamp.now().strftime('%Y%m%d_%H%M%S')}.xlsx", "post_pre_xlsx")
 
 def tab_pre_bcp_txt():
     st.header("PRE BCP-txt")
@@ -219,168 +202,7 @@ def tab_pre_bcp_txt():
     pdf_file = st.file_uploader("PDF", type="pdf", key="pre_txt_pdf")
     txt_file = st.file_uploader("TXT", type="txt", key="pre_txt_txt")
     if pdf_file and txt_file:
-        with st.spinner("Procesando PRE BCP-txt…"):
-            pdf_bytes = pdf_file.read()
-            text = "".join(p.get_text() or "" for p in fitz.open(stream=io.BytesIO(pdf_bytes), filetype="pdf"))
-            regs = sorted({int(m) for m in re.findall(r"Registro\s+(\d{1,5})", text)})
-            lines = txt_file.read().decode("utf-8", errors="ignore").splitlines()
-            indices = sorted({r * MULT for r in regs})
-
-            rows = []
-            for i in indices:
-                if 1 <= i <= len(lines):
-                    ln = lines[i - 1]
-                    dni = slice_fixed(ln, *TXT_POS["dni"])
-                    nombre = slice_fixed(ln, *TXT_POS["nombre"])
-                    ref = slice_fixed(ln, *TXT_POS["referencia"])
-                    imp = parse_amount(slice_fixed(ln, *TXT_POS["importe"]))
-                else:
-                    dni = nombre = ref = ""
-                    imp = 0.0
-                rows.append({
-                    "dni/cex": dni,
-                    "nombre": nombre,
-                    "importe": imp,
-                    "Referencia": ref,
-                })
-
-            if not rows:
-                df_out = pd.DataFrame(columns=["dni/cex", "nombre", "importe", "Referencia"])
-            else:
-                df_out = pd.DataFrame(rows)
-            df_out = df_out.reindex(columns=["dni/cex", "nombre", "importe", "Referencia"])
-
-            df_out["Estado"] = ESTADO
-            df_out["Codigo de Rechazo"] = code
-            df_out["Descripcion de Rechazo"] = desc
-            df_out = df_out[OUT_COLS]
-
-            cnt, total = _count_and_sum(df_out)
-            st.write(f"**Total transacciones:** {cnt}   |   **Suma de importes:** {total:,.2f}")
-
-            st.dataframe(df_out)
-
-            eb = df_to_excel_bytes(df_out)
-            st.download_button(
-                "Descargar excel de registros",
-                eb,
-                file_name="pre_bcp_txt.xlsx",
-                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-            )
-
-            _validate_and_post(df_out, "post_pre_txt")
-
-def tab_rechazo_ibk():
-    st.header("rechazo IBK")
-
-    zip_file = st.file_uploader("ZIP con Excel", type="zip", key="ibk_zip")
-    if zip_file:
-        with st.spinner("Procesando rechazo IBK…"):
-            buf = io.BytesIO(zip_file.read())
-            zf = zipfile.ZipFile(buf)
-            fname = next(n for n in zf.namelist() if n.lower().endswith((".xlsx", ".xls")))
-            df_raw = pd.read_excel(zf.open(fname), dtype=str)
-            df2 = df_raw.iloc[11:].reset_index(drop=True)
-
-            col_o = df2.iloc[:, 14]
-            mask = col_o.notna() & (col_o.astype(str).str.strip() != "")
-            df_valid = df2.loc[mask].reset_index(drop=True)
-
-            df_out = pd.DataFrame({
-                "dni/cex": df_valid.iloc[:, 4],
-                "nombre": df_valid.iloc[:, 5],
-                "importe": df_valid.iloc[:, 13].apply(parse_amount),
-                "Referencia": df_valid.iloc[:, 7],
-            })
-            df_out["Estado"] = ESTADO
-            df_out["Codigo de Rechazo"] = [
-                "R016" if any(k in str(o).lower() for k in KEYWORDS_NO_TIT) else "R002"
-                for o in df_valid.iloc[:, 14]
-            ]
-            df_out["Descripcion de Rechazo"] = [
-                "CLIENTE NO TITULAR DE LA CUENTA" if any(k in str(o).lower() for k in KEYWORDS_NO_TIT)
-                else "CUENTA INVALIDA"
-                for o in df_valid.iloc[:, 14]
-            ]
-            df_out = df_out[OUT_COLS]
-
-            cnt, total = _count_and_sum(df_out)
-            st.write(f"**Total transacciones:** {cnt}   |   **Suma de importes:** {total:,.2f}")
-
-            st.dataframe(df_out)
-
-            eb = df_to_excel_bytes(df_out)
-            st.download_button(
-                "Descargar excel de registros",
-                eb,
-                file_name="rechazo_ibk.xlsx",
-                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-            )
-
-            _validate_and_post(df_out, "post_ibk")
-
-def tab_post_bcp_xlsx():
-    st.header("POST BCP-xlsx")
-    code, desc = select_code("post_xlsx_code", "R001")
-
-    pdf_file = st.file_uploader("PDF de DNIs", type="pdf", key="post_xlsx_pdf")
-    ex_file = st.file_uploader("Excel masivo", type="xlsx", key="post_xlsx_xls")
-    if pdf_file and ex_file:
-        with st.spinner("Procesando POST BCP-xlsx…"):
-            pdf_bytes = pdf_file.read()
-            text = "".join(p.get_text() or "" for p in fitz.open(stream=io.BytesIO(pdf_bytes), filetype="pdf"))
-            docs = set(re.findall(r"\b\d{6,}\b", text))
-
-            df_raw = pd.read_excel(ex_file, dtype=str)
-            if docs:
-                mask = df_raw.astype(str).apply(lambda col: col.isin(docs)).any(axis=1)
-                df_temp = df_raw.loc[mask].reset_index(drop=True)
-            else:
-                st.error("No se detectaron identificadores en el PDF. Adjunte un PDF válido.")
-                return
-
-            ref_out = df_temp.iloc[:, 7] if df_temp.shape[1] > 7 else pd.Series([""] * len(df_temp))
-            nombre_out = df_temp.iloc[:, 3] if df_temp.shape[1] > 3 else (df_temp.iloc[:, 1] if df_temp.shape[1] > 1 else pd.Series([""] * len(df_temp)))
-
-            df_out = pd.DataFrame({
-                "dni/cex": df_temp.iloc[:, 0],
-                "nombre": nombre_out,
-                "importe": df_temp.iloc[:, 12].apply(parse_amount) if df_temp.shape[1] > 12 else pd.Series([0.0] * len(df_temp)),
-                "Referencia": ref_out,
-            })
-            df_out["Estado"] = ESTADO
-            df_out["Codigo de Rechazo"] = code
-            df_out["Descripcion de Rechazo"] = desc
-            df_out = df_out[OUT_COLS]
-
-            cnt, total = _count_and_sum(df_out)
-            st.write(f"**Total transacciones:** {cnt}   |   **Suma de importes:** {total:,.2f}")
-
-            st.dataframe(df_out)
-
-            eb = df_to_excel_bytes(df_out)
-            st.download_button(
-                "Descargar excel de registros",
-                eb,
-                file_name="post_bcp_xlsx.xlsx",
-                mime="application/vnd.openxmlformats-officedocument-spreadsheetml.sheet",
-            )
-
-            _validate_and_post(df_out, "post_post_xlsx")
-
-# -------------- Render pestañas --------------
-tabs = st.tabs([
-    "PRE BCP-txt",
-    "-", 
-    "rechazo IBK",
-    "POST BCP-xlsx",
-])
-
-with tabs[0]:
-    tab_pre_bcp_txt()
-with tabs[1]:
-    tab_pre_bcp_xlsx()
-with tabs[2]:
-    tab_rechazo_ibk()
-with tabs[3]:
-    tab_post_bcp_xlsx()
+        pdf_bytes = pdf_file.read()
+        text = extract_text_from_pdf(pdf_bytes)
+        regs = sorted({int(m) for m in re.findall(r"Registro\s+(\d{1,5})", text)})
+        lines = txt_file.read().decode("utf-
