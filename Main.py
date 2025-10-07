@@ -159,7 +159,7 @@ def render_preview_and_actions(df_out: pd.DataFrame, download_key: str, download
 
 # -------------- Flujos --------------
 def tab_pre_bcp_xlsx():
-    st.header("Antigua manera de rechazar con PDF")
+    st.header("PRE BCP-xlsx")
     code, desc = select_code("pre_xlsx_code", "R002")
 
     pdf_file = st.file_uploader("PDF con filas", type="pdf", key="pre_xlsx_pdf")
@@ -205,4 +205,8 @@ def tab_pre_bcp_txt():
         pdf_bytes = pdf_file.read()
         text = extract_text_from_pdf(pdf_bytes)
         regs = sorted({int(m) for m in re.findall(r"Registro\s+(\d{1,5})", text)})
-        lines = txt_file.read().decode("utf-8
+        lines = txt_file.read().decode("utf-8", errors="ignore").splitlines()
+        indices = sorted({r * MULT for r in regs})
+
+        rows = []
+        for i
