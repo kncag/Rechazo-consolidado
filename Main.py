@@ -205,4 +205,4 @@ def tab_pre_bcp_txt():
         pdf_bytes = pdf_file.read()
         text = extract_text_from_pdf(pdf_bytes)
         regs = sorted({int(m) for m in re.findall(r"Registro\s+(\d{1,5})", text)})
-        lines = txt_file.read().decode("utf-
+        lines = txt_file.read().decode("utf-8
