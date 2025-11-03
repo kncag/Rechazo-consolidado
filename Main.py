@@ -104,6 +104,8 @@ def post_to_endpoint(excel_bytes: bytes) -> tuple[int, str]:
 def select_code(key: str, default: str) -> tuple[str, str]:
     if key not in st.session_state:
         st.session_state[key] = default
+    _, center, _ = st.columns([1, 2, 1])
+    with center:
         b1, b2, b3 = st.columns(3, gap="small")
         if b1.button("R001\nDOCUMENTO ERRADO", key=f"{key}_r001"):
             st.session_state[key] = "R001"
@@ -120,7 +122,7 @@ def _validate_and_post(df: pd.DataFrame, button_key: str):
     if list(df.columns) != OUT_COLS:
         st.error(f"Encabezados inválidos. Se requieren: {OUT_COLS}")
         return
-    if st.button("RECH-POSTMAN", key=button_key, use_container_width=True):
+    if st.button("RECH-POSTMAN", key=button_key):
         payload = df[SUBSET_COLS]
         excel_bytes = df_to_excel_bytes(payload)
         status, resp = post_to_endpoint(excel_bytes)
@@ -201,17 +203,14 @@ def tab_pre_bcp_xlsx():
             st.dataframe(df_out)
 
             eb = df_to_excel_bytes(df_out)
-            col1, col2 = st.columns(2) # Crea dos columnas iguales
-            with col2:
-                st.download_button(
-                    "Descargar excel de registros",
-                    eb,
-                    file_name="pre_bcp_xlsx.xlsx",
-                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                    use_container_width=True # <-- (Opcional) Hace que el botón llene la columna
-                )
-            with col1:
-                _validate_and_post(df_out, "post_pre_xlsx")
+            st.download_button(
+                "Descargar excel de registros",
+                eb,
+                file_name="pre_bcp_xlsx.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            )
+
+            _validate_and_post(df_out, "post_pre_xlsx")
 
 def tab_pre_bcp_txt():
     st.header("PRE BCP-txt")
@@ -262,17 +261,14 @@ def tab_pre_bcp_txt():
             st.dataframe(df_out)
 
             eb = df_to_excel_bytes(df_out)
-            col1, col2 = st.columns(2) # Crea dos columnas iguales
-            with col2:
-                st.download_button(
-                    "Descargar excel de registros",
-                    eb,
-                    file_name="pre_bcp_xlsx.xlsx",
-                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                    use_container_width=True # <-- (Opcional) Hace que el botón llene la columna
-                )
-            with col1:
-                _validate_and_post(df_out, "post_pre_xlsx")
+            st.download_button(
+                "Descargar excel de registros",
+                eb,
+                file_name="pre_bcp_txt.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            )
+
+            _validate_and_post(df_out, "post_pre_txt")
 
 def tab_rechazo_ibk():
     st.header("rechazo IBK")
@@ -314,17 +310,14 @@ def tab_rechazo_ibk():
             st.dataframe(df_out)
 
             eb = df_to_excel_bytes(df_out)
-            col1, col2 = st.columns(2) # Crea dos columnas iguales
-            with col2:
-                st.download_button(
-                    "Descargar excel de registros",
-                    eb,
-                    file_name="pre_bcp_xlsx.xlsx",
-                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                    use_container_width=True # <-- (Opcional) Hace que el botón llene la columna
-                )
-            with col1:
-                _validate_and_post(df_out, "post_pre_xlsx")
+            st.download_button(
+                "Descargar excel de registros",
+                eb,
+                file_name="rechazo_ibk.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            )
+
+            _validate_and_post(df_out, "post_ibk")
 
 def tab_post_bcp_xlsx():
     st.header("POST BCP-xlsx")
@@ -366,17 +359,14 @@ def tab_post_bcp_xlsx():
             st.dataframe(df_out)
 
             eb = df_to_excel_bytes(df_out)
-            col1, col2 = st.columns(2) # Crea dos columnas iguales
-            with col2:
-                st.download_button(
-                    "Descargar excel de registros",
-                    eb,
-                    file_name="pre_bcp_xlsx.xlsx",
-                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                    use_container_width=True # <-- (Opcional) Hace que el botón llene la columna
-                )
-            with col1:
-                _validate_and_post(df_out, "post_pre_xlsx")
+            st.download_button(
+                "Descargar excel de registros",
+                eb,
+                file_name="post_bcp_xlsx.xlsx",
+                mime="application/vnd.openxmlformats-officedocument-spreadsheetml.sheet",
+            )
+
+            _validate_and_post(df_out, "post_post_xlsx")
 
 # -------------- Render pestañas --------------
 tabs = st.tabs([
