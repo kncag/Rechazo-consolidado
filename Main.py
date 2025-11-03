@@ -104,7 +104,7 @@ def post_to_endpoint(excel_bytes: bytes) -> tuple[int, str]:
 def select_code(key: str, default: str) -> tuple[str, str]:
     if key not in st.session_state:
         st.session_state[key] = default
-    _, center, _ = st.columns([1, 2, 1])
+    _, center, _ = st.columns([1, 8, 1])
     with center:
         b1, b2, b3 = st.columns(3, gap="small")
         if b1.button("R001\nDOCUMENTO ERRADO", key=f"{key}_r001"):
