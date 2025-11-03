@@ -321,10 +321,14 @@ def tab_rechazo_ibk():
 
 def tab_post_bcp_xlsx():
     st.header("POST BCP-xlsx")
+    
+    # 1. Los botones siguen aquí, ahora definen el CÓDIGO POR DEFECTO
     code, desc = select_code("post_xlsx_code", "R001")
+    st.info("Elige un código por defecto. Podrás editar cada fila individualmente en la tabla de resultados.")
 
     pdf_file = st.file_uploader("PDF de DNIs", type="pdf", key="post_xlsx_pdf")
     ex_file = st.file_uploader("Excel masivo", type="xlsx", key="post_xlsx_xls")
+    
     if pdf_file and ex_file:
         with st.spinner("Procesando POST BCP-xlsx…"):
             pdf_bytes = pdf_file.read()
@@ -342,31 +346,72 @@ def tab_post_bcp_xlsx():
             ref_out = df_temp.iloc[:, 7] if df_temp.shape[1] > 7 else pd.Series([""] * len(df_temp))
             nombre_out = df_temp.iloc[:, 3] if df_temp.shape[1] > 3 else (df_temp.iloc[:, 1] if df_temp.shape[1] > 1 else pd.Series([""] * len(df_temp)))
 
+            # --- MODIFICACIÓN INICIA ---
+            
+            # 2. Se crea el DataFrame BASE (solo con los datos extraídos)
             df_out = pd.DataFrame({
                 "dni/cex": df_temp.iloc[:, 0],
                 "nombre": nombre_out,
                 "importe": df_temp.iloc[:, 12].apply(parse_amount) if df_temp.shape[1] > 12 else pd.Series([0.0] * len(df_temp)),
                 "Referencia": ref_out,
             })
-            df_out["Estado"] = ESTADO
+            
+            # 3. Se asigna el CÓDIGO POR DEFECTO a la nueva columna
             df_out["Codigo de Rechazo"] = code
-            df_out["Descripcion de Rechazo"] = desc
-            df_out = df_out[OUT_COLS]
+            
+            # 4. Obtenemos la lista de códigos válidos para el desplegable
+            valid_codes = list(CODE_DESC.keys())
 
-            cnt, total = _count_and_sum(df_out)
-            st.write(f"**Total transacciones:** {cnt}   |   **Suma de importes:** {total:,.2f}")
+            st.subheader("Registros encontrados (editables)")
+            st.caption("Puedes cambiar el 'Código de Rechazo' de cada fila usando el desplegable.")
 
-            st.dataframe(df_out)
+            # 5. REEMPLAZAMOS st.dataframe POR st.data_editor
+            edited_df = st.data_editor(
+                df_out,
+                column_config={
+                    "Codigo de Rechazo": st.column_config.SelectboxColumn(
+                        "Código de Rechazo",
+                        help="Seleccione un código para esta fila",
+                        options=valid_codes,
+                        required=True,
+                    ),
+                    # Configuramos las otras columnas como "deshabilitadas" para evitar editarlas
+                    "dni/cex": st.column_config.TextColumn("DNI/CEX", disabled=True),
+                    "nombre": st.column_config.TextColumn("Nombre", disabled=True),
+                    "importe": st.column_config.NumberColumn("Importe", format="%.2f", disabled=True),
+                    "Referencia": st.column_config.TextColumn("Referencia", disabled=True),
+                },
+                use_container_width=True,
+                num_rows="dynamic", # Permite al usuario añadir o eliminar filas si lo necesita
+                key="editor_post_bcp"
+            )
 
-            eb = df_to_excel_bytes(df_out)
+            # 6. Creamos el DataFrame FINAL basado en las ediciones del usuario
+            df_final = edited_df.copy()
+            df_final["Estado"] = ESTADO
+            
+            # 7. APLICAMOS LA DESCRIPCIÓN BASADA EN EL CÓDIGO DE CADA FILA
+            df_final["Descripcion de Rechazo"] = df_final["Codigo de Rechazo"].map(CODE_DESC)
+            
+            # 8. Aseguramos el orden final de las columnas
+            df_final = df_final[OUT_COLS]
+
+            # 9. Usamos el 'df_final' (editado) para el resto de operaciones
+            cnt, total = _count_and_sum(df_final)
+            st.write(f"**Total transacciones:** {cnt}  |  **Suma de importes:** {total:,.2f}")
+
+            # 10. El botón de descarga usará el 'df_final'
+            eb = df_to_excel_bytes(df_final)
             st.download_button(
                 "Descargar excel de registros",
                 eb,
                 file_name="post_bcp_xlsx.xlsx",
-                mime="application/vnd.openxmlformats-officedocument-spreadsheetml.sheet",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
             )
 
-            _validate_and_post(df_out, "post_post_xlsx")
+            # 11. El POST usará el 'df_final'
+            _validate_and_post(df_final, "post_post_xlsx")
+            
 
 # -------------- Render pestañas --------------
 tabs = st.tabs([
