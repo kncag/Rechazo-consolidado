@@ -166,7 +166,6 @@ def _map_situacion_to_code(s: str) -> tuple[str, str]:
     if "CUENTA CANCELADA" in su or "CANCELADA" in su:
         return "R002", "CUENTA CANCELADA"
     return "R002", "CUENTA INVALIDA"
-# ... (después de la función _map_situacion_to_code)
 
 def parse_sco_importe(raw: str) -> float:
     """Convierte un importe de TXT Scotiabank (ej. '00000004814') a float."""
@@ -223,6 +222,27 @@ def map_sco_xls_error_to_code(observation: str) -> tuple[str, str]:
         return "R017", "CUENTA DE AFP / CTS"
     
     # Fallback por si aparece una observación nueva
+    return "R002", "CUENTA INVALIDA"
+def _extract_dni_from_bbva_pdf(raw_text: str) -> str | None:
+    """Extrae el DNI de la celda 'Doc.Identidad' del PDF de BBVA."""
+    if not raw_text:
+        return None
+    # Busca 8 o más dígitos seguidos
+    match = re.search(r"(\d{8,})", raw_text)
+    return match.group(1) if match else None
+
+def _map_situacion_to_code_bbva(s: str) -> tuple[str, str]:
+    """Mapea la 'Situación' del PDF de BBVA a un código de rechazo."""
+    s_upper = str(s).upper()
+    
+    if "DOCUMENTO ERRADO" in s_upper:
+        return "R001", "DOCUMENTO ERRADO"
+    if "CUENTA CANCELADA" in s_upper:
+        return "R002", "CUENTA CANCELADA"
+    
+    # Añade más mapeos aquí si es necesario
+    
+    # Fallback para cualquier otra situación no exitosa
     return "R002", "CUENTA INVALIDA"
 
 # -------------- Flujos --------------
@@ -683,6 +703,119 @@ def tab_sco_processor():
             )
         with col1:
             _validate_and_post(df_final, "post_sco")
+def tab_bbva():
+    st.header("BBVA")
+    # 1. El usuario sigue seleccionando un código de RECHAZO POR DEFECTO
+    # (para filas que no tengan una 'Situación' específica en el PDF)
+    code_ui, desc_ui = select_code("bbva_code", "R002")
+
+    pdf_file = st.file_uploader("PDF de BBVA (con columna Situación)", type="pdf", key="bbva_pdf")
+    ex_file = st.file_uploader("Excel masivo", type="xlsx", key="bbva_xls")
+    
+    # Ya no necesitamos el checkbox de diagnóstico, la lectura es directa
+    
+    if pdf_file and ex_file:
+        with st.spinner("Procesando BBVA con 'pdfplumber'..."):
+            
+            # --- Paso A: Leer el PDF con pdfplumber y crear el mapa ID -> Situación ---
+            id_situ_map = {}
+            docs = set()
+            try:
+                with pdfplumber.open(pdf_file) as pdf:
+                    for page in pdf.pages:
+                        table = page.extract_table()
+                        if not table:
+                            continue
+                            
+                        for row in table:
+                            # Saltamos cabeceras o filas inválidas
+                            if not row or row[0] == "Sel" or not row[5]:
+                                continue
+                            
+                            # Col 5: Doc.Identidad, Col 8: Situación
+                            dni = _extract_dni_from_bbva_pdf(row[5])
+                            situacion = str(row[8]).strip() if row[8] else ""
+                            
+                            if dni:
+                                docs.add(dni)
+                                if situacion and "PAGADO" not in situacion.upper():
+                                    id_situ_map[dni] = situacion
+            
+            except Exception as e:
+                st.error(f"Error fatal al procesar la tabla del PDF con pdfplumber: {e}")
+                st.warning("Asegúrate de tener 'pdfplumber' y 'xlrd' instalados.")
+                return
+
+            # --- Paso B: Cargar el Excel y filtrar por los IDs encontrados ---
+            df_raw = pd.read_excel(ex_file, dtype=str)
+            if not docs:
+                st.error("No se detectaron identificadores (DNI) en el PDF.")
+                return
+
+            mask = df_raw.astype(str).apply(lambda col: col.isin(docs)).any(axis=1)
+            df_temp = df_raw.loc[mask].reset_index(drop=True)
+            
+            if df_temp.empty:
+                st.warning("No se encontraron filas en el Excel que coincidan con los DNI del PDF.")
+                st.write("IDs detectados en PDF:", sorted(list(docs))[:50])
+                return
+
+            # --- Paso C: Construir el DataFrame final ---
+            
+            # Extraer columnas del Excel (mismo método que en tu código)
+            ref_out = df_temp.iloc[:, 7] if df_temp.shape[1] > 7 else pd.Series([""] * len(df_temp))
+            nombre_out = df_temp.iloc[:, 3] if df_temp.shape[1] > 3 else (df_temp.iloc[:, 1] if df_temp.shape[1] > 1 else pd.Series([""] * len(df_temp)))
+            dni_out = df_temp.iloc[:, 0] if df_temp.shape[1] > 0 else pd.Series([""] * len(df_temp))
+
+            df_out = pd.DataFrame({
+                "dni/cex": dni_out,
+                "nombre": nombre_out,
+                "importe": df_temp.iloc[:, 12].apply(parse_amount) if df_temp.shape[1] > 12 else pd.Series([0.0] * len(df_temp)),
+                "Referencia": ref_out,
+            })
+
+            # --- Paso D: Asignar códigos de rechazo ---
+            cods = []
+            descs = []
+            for dni in df_out["dni/cex"]:
+                situacion = id_situ_map.get(str(dni)) # Buscar el DNI en nuestro mapa
+                
+                if situacion:
+                    # Si el DNI tiene una situación de error, la mapeamos
+                    code_m, desc_m = _map_situacion_to_code_bbva(situacion)
+                else:
+                    # Si el DNI no está en el mapa (ej. "PAGADO" o no encontrado)
+                    # usamos el código por defecto seleccionado en la UI
+                    code_m, desc_m = code_ui, desc_ui
+                
+                cods.append(code_m)
+                descs.append(desc_m)
+
+            df_out["Estado"] = ESTADO
+            df_out["Codigo de Rechazo"] = cods
+            df_out["Descripcion de Rechazo"] = descs
+            df_out = df_out[OUT_COLS]
+
+            # --- Paso E: Mostrar resultados y botones (mismo método que en tu código) ---
+            cnt, total = _count_and_sum(df_out)
+            counts_by_code = df_out["Codigo de Rechazo"].value_counts().to_dict()
+            st.write(f"**Total transacciones:** {cnt}  |  **Suma de importes:** {total:,.2f}")
+            st.write("Asignación por código:", counts_by_code)
+
+            # --- AQUÍ AÑADE LA EDICIÓN POR FILA (opcional) ---
+            # En lugar de st.dataframe(df_out), puedes usar el st.data_editor
+            # como lo hicimos en 'tab_post_bcp_xlsx' para que sea editable.
+            
+            st.dataframe(df_out) # <-- Reemplaza esto con st.data_editor si quieres
+
+            eb = df_to_excel_bytes(df_out)
+            st.download_button(
+                "Descargar excel de registros",
+                eb,
+                file_name="bbva_rechazos.xlsx",
+                mime="application/vnd.openxmlformats-officedocument-spreadsheetml.sheet",
+            )
+            _validate_and_post(df_out, "post_bbva")
 # -------------- Render pestañas --------------
 tabs = st.tabs([
     "PRE BCP-txt",
@@ -690,6 +823,7 @@ tabs = st.tabs([
     "rechazo IBK",
     "POST BCP-xlsx",
     "Procesador SCO",
+    "BBVA"
 ])
 
 with tabs[0]:
@@ -702,3 +836,5 @@ with tabs[3]:
     tab_post_bcp_xlsx()
 with tabs[4]:          
     tab_sco_processor()
+with tabs[5]: 
+    tab_bbva()
