@@ -192,7 +192,7 @@ def map_sco_pdf_error_to_code(line: str) -> tuple[str | None, str, str]:
     dni = match.group(1)
     
     # 2. Revisar el estado al final de la línea
-    if line.endswith("O.K."):
+    if line.endswith("Ο.Κ."):
         return None, "", ""  # No es un error
         
     if "CTA ES CTS" in line.upper():
