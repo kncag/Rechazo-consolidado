@@ -32,8 +32,15 @@ CODE_DESC = {
     "R001": "DOCUMENTO ERRADO",
     "R002": "CUENTA INVALIDA",
     "R007": "RECHAZO POR CCI",
+    "R017": "CUENTA DE AFP / CTS",
 }
-
+# NUEVA CONSTANTE para el layout del TXT de Scotiabank
+SCO_TXT_POS = {
+    "dni": (2, 9),        # Posición del DNI
+    "nombre": (13, 63),   # Posición del Nombre
+    "importe": (86, 97),  # Posición del Importe
+    "referencia": (116, 127), # Posición de Referencia
+}
 KEYWORDS_NO_TIT = [
     "no es titular",
     "beneficiario no",
@@ -157,6 +164,56 @@ def _map_situacion_to_code(s: str) -> tuple[str, str]:
         return "R001", "DOCUMENTO ERRADO"
     if "CUENTA CANCELADA" in su or "CANCELADA" in su:
         return "R002", "CUENTA CANCELADA"
+    return "R002", "CUENTA INVALIDA"
+# ... (después de la función _map_situacion_to_code)
+
+def parse_sco_importe(raw: str) -> float:
+    """Convierte un importe de TXT Scotiabank (ej. '00000004814') a float."""
+    try:
+        # Asume que los últimos 2 dígitos son decimales
+        return float(raw) / 100.0
+    except ValueError:
+        return 0.0
+
+def map_sco_pdf_error_to_code(line: str) -> tuple[str | None, str, str]:
+    """
+    Analiza una línea del PDF de Scotiabank.
+    Retorna (dni, code, description) si es un error, o (None, "", "") si está O.K.
+    """
+    line = line.strip()
+    if not line:
+        return None, "", ""
+
+    # 1. Buscar el DNI al inicio de la línea
+    match = re.search(r"^(\d{8})\b", line)
+    if not match:
+        return None, "", ""
+    
+    dni = match.group(1)
+    
+    # 2. Revisar el estado al final de la línea
+    if line.endswith("O.K."):
+        return None, "", ""  # No es un error
+        
+    if "CTA ES CTS" in line.upper():
+        return dni, "R017", "CUENTA DE AFP / CTS"
+    
+    # 3. Si no es O.K. y no es CTS, es un rechazo genérico
+    # (Ej. la línea que termina en '181-0' en el PDF de ejemplo)
+    return dni, "R002", "CUENTA INVALIDA"
+
+def map_sco_xls_error_to_code(observation: str) -> tuple[str, str]:
+    """Asigna código de rechazo según la columna 'Observación:' del XLS."""
+    obs = str(observation).strip()
+    
+    if "Verificar cuenta y/o documento" in obs:
+        return "R001", "DOCUMENTO ERRADO"
+    if obs == "Cancelada" or obs == "Verificar cuenta.":
+        return "R002", "CUENTA INVALIDA"
+    if "Abono AFP" in obs:
+        return "R017", "CUENTA DE AFP / CTS"
+    
+    # Fallback por si aparece una observación nueva
     return "R002", "CUENTA INVALIDA"
 
 # -------------- Flujos --------------
@@ -412,13 +469,171 @@ def tab_post_bcp_xlsx():
             # 11. El POST usará el 'df_final'
             _validate_and_post(df_final, "post_post_xlsx")
             
+def tab_sco_processor():
+    st.header("Procesador Scotiabank (PDF + TXT + XLS)")
+    st.info("Este tab cruza 3 archivos para identificar rechazos y permite la edición final.")
 
+    # 1. Carga de archivos
+    pdf_file = st.file_uploader("PDF Detalle de orden", type="pdf", key="sco_pdf")
+    txt_file = st.file_uploader("TXT Masivo", type="txt", key="sco_txt")
+    xls_file = st.file_uploader("XLS Errores encontrados", type=["xls", "xlsx", "csv"], key="sco_xls")
+
+    if not (pdf_file and txt_file and xls_file):
+        st.caption("Por favor, cargue los 3 archivos requeridos.")
+        return
+
+    with st.spinner("Procesando archivos de Scotiabank..."):
+        
+        # --- Tareas de Extracción y Resumen ---
+        pdf_bytes = pdf_file.read()
+        pdf_text = "".join(p.get_text() or "" for p in fitz.open(stream=io.BytesIO(pdf_bytes), filetype="pdf"))
+        
+        st.subheader("Resumen de la Orden (PDF)")
+        col1, col2 = st.columns(2)
+        with col1:
+            orden_match = re.search(r"Detalle de orden No\.\s+(\d+)", pdf_text)
+            orden_fija = f"9242{orden_match.group(1)}" if orden_match else "No encontrado"
+            st.text_input("Nro. Orden (Formato Fijo)", orden_fija, key="sco_orden")
+        
+        with col2:
+            total_match = re.search(r"Total de la orden\s+([\d,\.]+)", pdf_text)
+            monto_total = f"S/ {total_match.group(1)}" if total_match else "No encontrado"
+            st.text_input("Monto Total de Orden", monto_total, key="sco_total")
+
+        # --- Preparación de datos ---
+        txt_lines = txt_file.read().decode("utf-8", errors="ignore").splitlines()
+        
+        # Crear diccionarios para cruce rápido
+        # (DNI -> línea TXT)
+        dni_map = {
+            slice_fixed(line, *SCO_TXT_POS["dni"]): line 
+            for line in txt_lines if line.strip()
+        }
+        # (Nro Línea -> línea TXT)
+        line_num_map = {
+            i + 1: line 
+            for i, line in enumerate(txt_lines) if line.strip()
+        }
+        
+        rows_to_reject = []
+
+        # --- Fuente A: Errores desde el PDF ---
+        pdf_lines = pdf_text.splitlines()
+        for line in pdf_lines:
+            dni, code, desc = map_sco_pdf_error_to_code(line)
+            
+            if dni and dni in dni_map:
+                txt_line = dni_map[dni]
+                rows_to_reject.append({
+                    "dni/cex": dni,
+                    "nombre": slice_fixed(txt_line, *SCO_TXT_POS["nombre"]),
+                    "importe": parse_sco_importe(slice_fixed(txt_line, *SCO_TXT_POS["importe"])),
+                    "Referencia": slice_fixed(txt_line, *SCO_TXT_POS["referencia"]),
+                    "Codigo de Rechazo": code,
+                    "Fuente": "PDF"
+                })
+
+        # --- Fuente B: Errores desde el XLS ---
+        try:
+            # El XLS de ejemplo es un CSV con 6 líneas de basura al inicio
+            # 'header=6' significa que la fila 7 (índice 6) es la cabecera
+            df_xls = pd.read_csv(xls_file, header=6, dtype=str)
+        except Exception as e:
+            st.error(f"No se pudo leer el archivo XLS/CSV de errores: {e}")
+            return
+
+        for _, row in df_xls.iterrows():
+            line_num_str = row.iloc[0]  # Columna "Linea"
+            
+            # Si la primera celda no es un número, saltar fila
+            if pd.isna(line_num_str):
+                continue
+            
+            try:
+                line_num = int(float(line_num_str)) # Convertir "129.0" a 129
+            except ValueError:
+                continue # Saltar si no es un número válido
+
+            observation = row.iloc[3]  # Columna "Observación:"
+            
+            if line_num in line_num_map:
+                txt_line = line_num_map[line_num]
+                code, desc = map_sco_xls_error_to_code(observation)
+                
+                rows_to_reject.append({
+                    "dni/cex": slice_fixed(txt_line, *SCO_TXT_POS["dni"]),
+                    "nombre": slice_fixed(txt_line, *SCO_TXT_POS["nombre"]),
+                    "importe": parse_sco_importe(slice_fixed(txt_line, *SCO_TXT_POS["importe"])),
+                    "Referencia": slice_fixed(txt_line, 116, 127), # Usando la ref. específica
+                    "Codigo de Rechazo": code,
+                    "Fuente": "XLS"
+                })
+
+        # --- Sección 3: Tabla de Rechazo Interactiva ---
+        if not rows_to_reject:
+            st.success("Proceso completado. No se encontraron registros para rechazar.")
+            return
+
+        df_out = pd.DataFrame(rows_to_reject)
+        
+        # Eliminar duplicados (si un DNI falla en PDF y XLS, priorizar el XLS)
+        df_out = df_out.drop_duplicates(subset=["dni/cex"], keep="last")
+        
+        st.subheader("Registros a Rechazar (Editables)")
+        st.caption("Los códigos de rechazo han sido pre-asignados. Puedes cambiarlos individualmente.")
+
+        valid_codes = list(CODE_DESC.keys())
+        
+        edited_df = st.data_editor(
+            df_out,
+            column_config={
+                "Codigo de Rechazo": st.column_config.SelectboxColumn(
+                    "Código de Rechazo",
+                    options=valid_codes,
+                    required=True,
+                ),
+                "Fuente": st.column_config.TextColumn("Fuente", disabled=True),
+                "dni/cex": st.column_config.TextColumn("DNI/CEX", disabled=True),
+                "nombre": st.column_config.TextColumn("Nombre", disabled=True),
+                "importe": st.column_config.NumberColumn("Importe", format="%.2f", disabled=True),
+                "Referencia": st.column_config.TextColumn("Referencia", disabled=True),
+            },
+            use_container_width=True,
+            num_rows="dynamic",
+            key="editor_sco"
+        )
+        
+        # --- Construcción y envío final ---
+        df_final = edited_df.copy()
+        df_final["Estado"] = ESTADO
+        df_final["Descripcion de Rechazo"] = df_final["Codigo de Rechazo"].map(CODE_DESC)
+        
+        # Asegurarse que las columnas que se envían son las correctas
+        df_final = df_final[OUT_COLS]
+
+        cnt, total = _count_and_sum(df_final)
+        st.write(f"**Total transacciones a rechazar:** {cnt}  |  **Suma de importes:** {total:,.2f}")
+
+        eb = df_to_excel_bytes(df_final)
+        
+        col1, col2 = st.columns(2)
+        with col2:
+            st.download_button(
+                "Descargar excel de rechazos",
+                eb,
+                file_name="rechazos_sco.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                use_container_width=True
+            )
+        with col1:
+            _validate_and_post(df_final, "post_sco")
 # -------------- Render pestañas --------------
 tabs = st.tabs([
     "PRE BCP-txt",
     "-", 
     "rechazo IBK",
     "POST BCP-xlsx",
+    "Procesador SCO",
 ])
 
 with tabs[0]:
@@ -429,3 +644,5 @@ with tabs[2]:
     tab_rechazo_ibk()
 with tabs[3]:
     tab_post_bcp_xlsx()
+with tabs[4]:          
+    tab_sco_processor()
