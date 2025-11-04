@@ -537,7 +537,11 @@ def tab_sco_processor():
         try:
             # El XLS de ejemplo es un CSV con 6 líneas de basura al inicio
             # 'header=6' significa que la fila 7 (índice 6) es la cabecera
-            df_xls = pd.read_csv(xls_file, header=6, dtype=str)
+            
+            # --- MODIFICACIÓN AQUÍ ---
+            # Añadimos 'encoding="latin1"' para leer el CSV que no es UTF-8
+            df_xls = pd.read_csv(xls_file, header=6, dtype=str, encoding="latin1")
+            
         except Exception as e:
             st.error(f"No se pudo leer el archivo XLS/CSV de errores: {e}")
             return
