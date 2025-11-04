@@ -538,6 +538,9 @@ def tab_sco_processor():
         }
         
         rows_to_reject = []
+        
+        # --- MODIFICACIÓN 1: Inicializar un set para guardar DNIs no encontrados ---
+        dnis_not_in_txt = set()
 
         # --- Fuente A: Errores desde el PDF (Usando pdfplumber) ---
         try:
@@ -550,40 +553,29 @@ def tab_sco_processor():
                         continue  
                     
                     for row in table:
-                        # Saltar cabeceras (buscamos 'Documento' en la primera celda)
                         if not row or str(row[0]).startswith("Documento"):
                             continue
                         
                         dni = str(row[0]).replace("\n", "")
-                        
-                        # --- MODIFICACIÓN AQUÍ ---
-                        # Manejar dinámicamente el layout de 5 o 6 columnas
                         estado_raw = ""
+                        
                         if len(row) >= 6:
-                            # Layout de 6 columnas (Importe y Forma de Pago separados)
                             estado_raw = str(row[5]).replace("\n", " ")
                         elif len(row) == 5:
-                            # Layout de 5 columnas (Importe y Forma de Pago fusionados)
                             estado_raw = str(row[4]).replace("\n", " ")
                         else:
-                            continue # Layout desconocido, saltar fila
-                        # --- FIN DE LA MODIFICACIÓN ---
+                            continue 
 
-                        # Normalizamos caracteres griegos (Omicron y Kappa)
                         estado_norm = estado_raw.upper().replace("Ο", "O").replace("Κ", "K")
 
-                        # Si está O.K., la saltamos
                         if "O.K." in estado_norm:
                             continue
                         
-                        # Asignamos código de rechazo por defecto
                         code, desc = "R002", "CUENTA INVALIDA"
-                        
-                        # Asignamos error específico
                         if "CTA ES CTS" in estado_norm:
                             code, desc = "R017", "CUENTA DE AFP / CTS"
                         
-                        # Si es un error, buscar DNI en el TXT y añadir a la lista
+                        # --- MODIFICACIÓN 2: Añadir el 'else' para capturar DNIs faltantes ---
                         if dni in dni_map:
                             txt_line = dni_map[dni]
                             rows_to_reject.append({
@@ -594,10 +586,21 @@ def tab_sco_processor():
                                 "Codigo de Rechazo": code,
                                 "Fuente": "PDF"
                             })
+                        else:
+                            # Si el DNI no está en el TXT, lo guardamos para advertir
+                            dnis_not_in_txt.add(dni)
         
         except Exception as e:
             st.error(f"Error fatal al procesar la tabla del PDF con pdfplumber: {e}")
             return
+
+        # --- MODIFICACIÓN 3: Mostrar la advertencia si hubo DNIs faltantes ---
+        if dnis_not_in_txt:
+            st.warning("⚠️ **Advertencia:** Se encontraron DNIs en el PDF que no existen en el archivo TXT. Estos registros no se pueden procesar.")
+            st.caption("Esto suele ocurrir si los archivos PDF y TXT no son de la misma orden (ej. PDF de orden 0697 y TXT de orden 0973).")
+            with st.expander("Ver DNIs no encontrados en el TXT"):
+                st.write(sorted(list(dnis_not_in_txt)))
+
 
         # --- Fuente B: Errores desde el XLS (Opcional) ---
         if xls_file:
@@ -629,14 +632,18 @@ def tab_sco_processor():
                             "Codigo de Rechazo": code,
                             "Fuente": "XLS"
                         })
-            
+                    
+                    # (Nota: Aquí también podríamos añadir una advertencia si line_num no está en line_num_map)
+
             except Exception as e:
                 st.warning(f"No se pudo leer el archivo XLS (opcional): {e}")
                 st.warning("El proceso continuará solo con los datos del PDF.")
 
+
         # --- Sección 3: Tabla de Rechazo Interactiva ---
         if not rows_to_reject:
             st.success("Proceso completado. No se encontraron registros para rechazar.")
+            st.caption("(Si esperaba registros, verifique las advertencias de cruce de datos más arriba).")
             return
 
         df_out = pd.DataFrame(rows_to_reject)
