@@ -6,6 +6,7 @@ import zipfile
 import requests
 import streamlit as st
 import pandas as pd
+import pdfplumber
 
 try:
     import fitz  # PyMuPDF
@@ -492,32 +493,35 @@ def tab_sco_processor():
 
     with st.spinner("Procesando archivos de Scotiabank..."):
         
-        # --- Tareas de Extracción y Resumen ---
+        # --- Tareas de Extracción y Resumen (Usando fitz) ---
+        # Leemos los bytes y usamos fitz solo para el texto general
         pdf_bytes = pdf_file.read()
-        pdf_text = "".join(p.get_text() or "" for p in fitz.open(stream=io.BytesIO(pdf_bytes), filetype="pdf"))
-        
+        try:
+            pdf_text_fitz = "".join(p.get_text() or "" for p in fitz.open(stream=io.BytesIO(pdf_bytes), filetype="pdf"))
+        except Exception as e:
+            st.error(f"Error al leer el texto del PDF con fitz: {e}")
+            return
+
         st.subheader("Resumen de la Orden (PDF)")
         col1, col2 = st.columns(2)
         with col1:
-            orden_match = re.search(r"Detalle de orden No\.\s+(\d+)", pdf_text)
+            orden_match = re.search(r"Detalle de orden No\.\s+(\d+)", pdf_text_fitz)
             orden_fija = f"9242{orden_match.group(1)}" if orden_match else "No encontrado"
             st.text_input("Nro. Orden (Formato Fijo)", orden_fija, key="sco_orden")
         
         with col2:
-            total_match = re.search(r"Total de la orden\s+([\d,\.]+)", pdf_text)
+            total_match = re.search(r"Total de la orden\s+([\d,\.]+)", pdf_text_fitz)
             monto_total = f"S/ {total_match.group(1)}" if total_match else "No encontrado"
             st.text_input("Monto Total de Orden", monto_total, key="sco_total")
 
-        # --- Preparación de datos ---
+        # --- Preparación de datos TXT ---
         txt_lines = txt_file.read().decode("utf-8", errors="ignore").splitlines()
         
-        # Crear diccionarios para cruce rápido
-        # (DNI -> línea TXT)
+        # Diccionarios para cruce rápido
         dni_map = {
             slice_fixed(line, *SCO_TXT_POS["dni"]): line 
             for line in txt_lines if line.strip()
         }
-        # (Nro Línea -> línea TXT)
         line_num_map = {
             i + 1: line 
             for i, line in enumerate(txt_lines) if line.strip()
@@ -525,42 +529,76 @@ def tab_sco_processor():
         
         rows_to_reject = []
 
-        # --- Fuente A: Errores desde el PDF ---
-        pdf_lines = pdf_text.splitlines()
-        for line in pdf_lines:
-            dni, code, desc = map_sco_pdf_error_to_code(line)
-            
-            if dni and dni in dni_map:
-                txt_line = dni_map[dni]
-                rows_to_reject.append({
-                    "dni/cex": dni,
-                    "nombre": slice_fixed(txt_line, *SCO_TXT_POS["nombre"]),
-                    "importe": parse_sco_importe(slice_fixed(txt_line, *SCO_TXT_POS["importe"])),
-                    "Referencia": slice_fixed(txt_line, *SCO_TXT_POS["referencia"]),
-                    "Codigo de Rechazo": code,
-                    "Fuente": "PDF"
-                })
-
-        # --- Fuente B: Errores desde el XLS ---
+        # --- Fuente A: Errores desde el PDF (Usando pdfplumber) ---
         try:
-         
+            # Reseteamos el puntero del archivo para que pdfplumber pueda leerlo
+            pdf_file.seek(0)
+            
+            with pdfplumber.open(pdf_file) as pdf:
+                for page in pdf.pages:
+                    # extra_table() es la función clave
+                    table = page.extract_table()
+                    if not table:
+                        continue  # Saltar páginas sin tablas (ej. la portada)
+                    
+                    for row in table:
+                        if not row or row[0] == "Documento":
+                            continue  # Saltar filas vacías o la cabecera
+                        
+                        # Limpiamos los datos de la tabla (a veces tienen \n)
+                        dni = str(row[0]).replace("\n", "")
+                        estado_raw = str(row[5]).replace("\n", " ")
+
+                        # Normalizamos caracteres griegos (Omicron y Kappa)
+                        estado_norm = estado_raw.upper().replace("Ο", "O").replace("Κ", "K")
+
+                        # Si está O.K., la saltamos
+                        if "O.K." in estado_norm:
+                            continue
+                        
+                        # Asignamos código de rechazo por defecto
+                        code, desc = "R002", "CUENTA INVALIDA"
+                        
+                        # Asignamos error específico
+                        if "CTA ES CTS" in estado_norm:
+                            code, desc = "R017", "CUENTA DE AFP / CTS"
+                        
+                        # Si es un error, buscar DNI en el TXT y añadir a la lista
+                        if dni in dni_map:
+                            txt_line = dni_map[dni]
+                            rows_to_reject.append({
+                                "dni/cex": dni,
+                                "nombre": slice_fixed(txt_line, *SCO_TXT_POS["nombre"]),
+                                "importe": parse_sco_importe(slice_fixed(txt_line, *SCO_TXT_POS["importe"])),
+                                "Referencia": slice_fixed(txt_line, *SCO_TXT_POS["referencia"]),
+                                "Codigo de Rechazo": code,
+                                "Fuente": "PDF"
+                            })
+        
+        except Exception as e:
+            st.error(f"Error fatal al procesar la tabla del PDF con pdfplumber: {e}")
+            return
+
+
+        # --- Fuente B: Errores desde el XLS (Usando xlrd) ---
+        try:
+            # Usamos pd.read_excel (que ahora funcionará gracias a 'xlrd')
             df_xls = pd.read_excel(xls_file, header=6, dtype=str)
             
         except Exception as e:
             st.error(f"No se pudo leer el archivo XLS de errores: {e}")
+            st.warning("Asegúrate de haber instalado 'xlrd'.")
             return
 
         for _, row in df_xls.iterrows():
             line_num_str = row.iloc[0]  # Columna "Linea"
-            
-            # Si la primera celda no es un número, saltar fila
             if pd.isna(line_num_str):
                 continue
             
             try:
                 line_num = int(float(line_num_str)) # Convertir "129.0" a 129
             except ValueError:
-                continue # Saltar si no es un número válido
+                continue 
 
             observation = row.iloc[3]  # Columna "Observación:"
             
@@ -572,18 +610,19 @@ def tab_sco_processor():
                     "dni/cex": slice_fixed(txt_line, *SCO_TXT_POS["dni"]),
                     "nombre": slice_fixed(txt_line, *SCO_TXT_POS["nombre"]),
                     "importe": parse_sco_importe(slice_fixed(txt_line, *SCO_TXT_POS["importe"])),
-                    "Referencia": slice_fixed(txt_line, 116, 127), # Usando la ref. específica
+                    "Referencia": slice_fixed(txt_line, 116, 127),
                     "Codigo de Rechazo": code,
                     "Fuente": "XLS"
                 })
-        # --- Sección 3: Tabla de Rechazo Interactiva ---
+
+        # --- Sección 3: Tabla de Rechazo Interactiva (Sin cambios) ---
         if not rows_to_reject:
             st.success("Proceso completado. No se encontraron registros para rechazar.")
             return
 
         df_out = pd.DataFrame(rows_to_reject)
         
-        # Eliminar duplicados (si un DNI falla en PDF y XLS, priorizar el XLS)
+        # Eliminar duplicados (priorizando XLS)
         df_out = df_out.drop_duplicates(subset=["dni/cex"], keep="last")
         
         st.subheader("Registros a Rechazar (Editables)")
@@ -615,7 +654,6 @@ def tab_sco_processor():
         df_final["Estado"] = ESTADO
         df_final["Descripcion de Rechazo"] = df_final["Codigo de Rechazo"].map(CODE_DESC)
         
-        # Asegurarse que las columnas que se envían son las correctas
         df_final = df_final[OUT_COLS]
 
         cnt, total = _count_and_sum(df_final)
