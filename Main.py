@@ -191,15 +191,23 @@ def map_sco_pdf_error_to_code(line: str) -> tuple[str | None, str, str]:
     
     dni = match.group(1)
     
-    # 2. Revisar el estado al final de la línea
-    if line.endswith("Ο.Κ."):
-        return None, "", ""  # No es un error
-        
-    if "CTA ES CTS" in line.upper():
+    # 2. Normalizar la línea para la verificación
+    # Convertimos a mayúsculas y reemplazamos caracteres griegos
+    check_line = line.upper()
+    check_line = check_line.replace("Ο", "O")  # Griego Omicron -> 'O' Latina
+    check_line = check_line.replace("Κ", "K")  # Griego Kappa -> 'K' Latina
+
+    # 3. REVISAR ERRORES PRIMERO
+    if "CTA ES CTS" in check_line:
         return dni, "R017", "CUENTA DE AFP / CTS"
     
-    # 3. Si no es O.K. y no es CTS, es un rechazo genérico
-    # (Ej. la línea que termina en '181-0' en el PDF de ejemplo)
+    # 4. REVISAR ÉXITO DESPUÉS
+    # Ahora 'check_line.endswith("O.K.")' funcionará para ambas versiones
+    if check_line.endswith("O.K."):
+        return None, "", ""  # No es un error
+    
+    # 5. Si no es éxito ni error conocido, es un rechazo genérico
+    # Esta regla ya no se basará en mi ejemplo erróneo de "181-0"
     return dni, "R002", "CUENTA INVALIDA"
 
 def map_sco_xls_error_to_code(observation: str) -> tuple[str, str]:
