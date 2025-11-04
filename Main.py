@@ -485,16 +485,18 @@ def tab_sco_processor():
     # 1. Carga de archivos
     pdf_file = st.file_uploader("PDF Detalle de orden", type="pdf", key="sco_pdf")
     txt_file = st.file_uploader("TXT Masivo", type="txt", key="sco_txt")
-    xls_file = st.file_uploader("XLS Errores encontrados", type=["xls", "xlsx", "csv"], key="sco_xls")
+    
+    # --- MODIFICACIÓN 1: XLS ahora es opcional ---
+    xls_file = st.file_uploader("XLS Errores encontrados (Opcional)", type=["xls", "xlsx", "csv"], key="sco_xls")
 
-    if not (pdf_file and txt_file and xls_file):
-        st.caption("Por favor, cargue los 3 archivos requeridos.")
+    # --- MODIFICACIÓN 2: El chequeo principal solo requiere PDF y TXT ---
+    if not (pdf_file and txt_file):
+        st.caption("Por favor, cargue al menos los archivos PDF y TXT.")
         return
 
     with st.spinner("Procesando archivos de Scotiabank..."):
         
         # --- Tareas de Extracción y Resumen (Usando fitz) ---
-        # Leemos los bytes y usamos fitz solo para el texto general
         pdf_bytes = pdf_file.read()
         try:
             pdf_text_fitz = "".join(p.get_text() or "" for p in fitz.open(stream=io.BytesIO(pdf_bytes), filetype="pdf"))
@@ -504,20 +506,38 @@ def tab_sco_processor():
 
         st.subheader("Resumen de la Orden (PDF)")
         col1, col2 = st.columns(2)
+        
+        # Columna 1 (Nro. Orden - Sin cambios)
         with col1:
             orden_match = re.search(r"Detalle de orden No\.\s+(\d+)", pdf_text_fitz)
             orden_fija = f"9242{orden_match.group(1)}" if orden_match else "No encontrado"
             st.text_input("Nro. Orden (Formato Fijo)", orden_fija, key="sco_orden")
         
+        # --- MODIFICACIÓN 3: Cambios en Columna 2 (Cantidad y Monto) ---
         with col2:
-            total_match = re.search(r"Total de la orden\s+([\d,\.]+)", pdf_text_fitz)
-            monto_total = f"S/ {total_match.group(1)}" if total_match else "No encontrado"
-            st.text_input("Monto Total de Orden", monto_total, key="sco_total")
+            # Asumimos que el formato es: "Total de la orden [CANTIDAD] [MONTO]"
+            
+            # 1. Regex para la Cantidad (el primer número)
+            cantidad_match = re.search(r"Total de la orden\s+([\d,\.]+)", pdf_text_fitz)
+            cantidad_str = cantidad_match.group(1) if cantidad_match else "No encontrado"
+            
+            # 2. Regex para el Monto (el segundo número, que es el que quieres)
+            monto_match = re.search(r"Total de la orden\s+[\d,\.]+\s+([\d,\.]+)", pdf_text_fitz)
+            monto_str = f"S/ {monto_match.group(1)}" if monto_match else "No encontrado"
 
-        # --- Preparación de datos TXT ---
+            # Si el regex de monto falla (quizás solo hay 1 número), usamos el de cantidad
+            if monto_str == "No encontrado" and cantidad_str != "No encontrado":
+                monto_str = f"S/ {cantidad_str}"
+                cantidad_str = "N/A" # No se encontró un conteo separado
+
+            # 3. Mostrar ambos campos con los labels correctos
+            st.text_input("Cantidad de Ordenes", cantidad_str, key="sco_cantidad")
+            st.text_input("Monto Total de Orden", monto_str, key="sco_total")
+
+
+        # --- Preparación de datos TXT (Sin cambios) ---
         txt_lines = txt_file.read().decode("utf-8", errors="ignore").splitlines()
         
-        # Diccionarios para cruce rápido
         dni_map = {
             slice_fixed(line, *SCO_TXT_POS["dni"]): line 
             for line in txt_lines if line.strip()
@@ -529,41 +549,30 @@ def tab_sco_processor():
         
         rows_to_reject = []
 
-        # --- Fuente A: Errores desde el PDF (Usando pdfplumber) ---
+        # --- Fuente A: Errores desde el PDF (Sin cambios) ---
         try:
-            # Reseteamos el puntero del archivo para que pdfplumber pueda leerlo
             pdf_file.seek(0)
-            
             with pdfplumber.open(pdf_file) as pdf:
                 for page in pdf.pages:
-                    # extra_table() es la función clave
                     table = page.extract_table()
                     if not table:
-                        continue  # Saltar páginas sin tablas (ej. la portada)
+                        continue 
                     
                     for row in table:
                         if not row or row[0] == "Documento":
-                            continue  # Saltar filas vacías o la cabecera
+                            continue 
                         
-                        # Limpiamos los datos de la tabla (a veces tienen \n)
                         dni = str(row[0]).replace("\n", "")
                         estado_raw = str(row[5]).replace("\n", " ")
-
-                        # Normalizamos caracteres griegos (Omicron y Kappa)
                         estado_norm = estado_raw.upper().replace("Ο", "O").replace("Κ", "K")
 
-                        # Si está O.K., la saltamos
                         if "O.K." in estado_norm:
                             continue
                         
-                        # Asignamos código de rechazo por defecto
                         code, desc = "R002", "CUENTA INVALIDA"
-                        
-                        # Asignamos error específico
                         if "CTA ES CTS" in estado_norm:
                             code, desc = "R017", "CUENTA DE AFP / CTS"
                         
-                        # Si es un error, buscar DNI en el TXT y añadir a la lista
                         if dni in dni_map:
                             txt_line = dni_map[dni]
                             rows_to_reject.append({
@@ -580,40 +589,42 @@ def tab_sco_processor():
             return
 
 
-        # --- Fuente B: Errores desde el XLS (Usando xlrd) ---
-        try:
-            # Usamos pd.read_excel (que ahora funcionará gracias a 'xlrd')
-            df_xls = pd.read_excel(xls_file, header=6, dtype=str)
-            
-        except Exception as e:
-            st.error(f"No se pudo leer el archivo XLS de errores: {e}")
-            st.warning("Asegúrate de haber instalado 'xlrd'.")
-            return
-
-        for _, row in df_xls.iterrows():
-            line_num_str = row.iloc[0]  # Columna "Linea"
-            if pd.isna(line_num_str):
-                continue
-            
+        # --- MODIFICACIÓN 4: Fuente B (XLS) ahora es condicional ---
+        if xls_file:
             try:
-                line_num = int(float(line_num_str)) # Convertir "129.0" a 129
-            except ValueError:
-                continue 
-
-            observation = row.iloc[3]  # Columna "Observación:"
-            
-            if line_num in line_num_map:
-                txt_line = line_num_map[line_num]
-                code, desc = map_sco_xls_error_to_code(observation)
+                st.caption("Procesando archivo XLS opcional...")
+                df_xls = pd.read_excel(xls_file, header=6, dtype=str)
                 
-                rows_to_reject.append({
-                    "dni/cex": slice_fixed(txt_line, *SCO_TXT_POS["dni"]),
-                    "nombre": slice_fixed(txt_line, *SCO_TXT_POS["nombre"]),
-                    "importe": parse_sco_importe(slice_fixed(txt_line, *SCO_TXT_POS["importe"])),
-                    "Referencia": slice_fixed(txt_line, 116, 127),
-                    "Codigo de Rechazo": code,
-                    "Fuente": "XLS"
-                })
+                for _, row in df_xls.iterrows():
+                    line_num_str = row.iloc[0]
+                    if pd.isna(line_num_str):
+                        continue
+                    
+                    try:
+                        line_num = int(float(line_num_str))
+                    except ValueError:
+                        continue 
+
+                    observation = row.iloc[3]
+                    
+                    if line_num in line_num_map:
+                        txt_line = line_num_map[line_num]
+                        code, desc = map_sco_xls_error_to_code(observation)
+                        
+                        rows_to_reject.append({
+                            "dni/cex": slice_fixed(txt_line, *SCO_TXT_POS["dni"]),
+                            "nombre": slice_fixed(txt_line, *SCO_TXT_POS["nombre"]),
+                            "importe": parse_sco_importe(slice_fixed(txt_line, *SCO_TXT_POS["importe"])),
+                            "Referencia": slice_fixed(txt_line, 116, 127),
+                            "Codigo de Rechazo": code,
+                            "Fuente": "XLS"
+                        })
+            
+            except Exception as e:
+                # Si falla, solo advertimos, no detenemos el proceso
+                st.warning(f"No se pudo leer el archivo XLS (opcional): {e}")
+                st.warning("El proceso continuará solo con los datos del PDF.")
+
 
         # --- Sección 3: Tabla de Rechazo Interactiva (Sin cambios) ---
         if not rows_to_reject:
@@ -622,7 +633,7 @@ def tab_sco_processor():
 
         df_out = pd.DataFrame(rows_to_reject)
         
-        # Eliminar duplicados (priorizando XLS)
+        # Eliminar duplicados (priorizando XLS si existe)
         df_out = df_out.drop_duplicates(subset=["dni/cex"], keep="last")
         
         st.subheader("Registros a Rechazar (Editables)")
@@ -649,7 +660,7 @@ def tab_sco_processor():
             key="editor_sco"
         )
         
-        # --- Construcción y envío final ---
+        # --- Construcción y envío final (Sin cambios) ---
         df_final = edited_df.copy()
         df_final["Estado"] = ESTADO
         df_final["Descripcion de Rechazo"] = df_final["Codigo de Rechazo"].map(CODE_DESC)
