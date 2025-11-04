@@ -535,15 +535,11 @@ def tab_sco_processor():
 
         # --- Fuente B: Errores desde el XLS ---
         try:
-            # El XLS de ejemplo es un CSV con 6 líneas de basura al inicio
-            # 'header=6' significa que la fila 7 (índice 6) es la cabecera
-            
-            # --- MODIFICACIÓN AQUÍ ---
-            # Añadimos 'encoding="latin1"' para leer el CSV que no es UTF-8
-            df_xls = pd.read_csv(xls_file, header=6, dtype=str, encoding="latin1")
+         
+            df_xls = pd.read_excel(xls_file, header=6, dtype=str)
             
         except Exception as e:
-            st.error(f"No se pudo leer el archivo XLS/CSV de errores: {e}")
+            st.error(f"No se pudo leer el archivo XLS de errores: {e}")
             return
 
         for _, row in df_xls.iterrows():
@@ -572,7 +568,6 @@ def tab_sco_processor():
                     "Codigo de Rechazo": code,
                     "Fuente": "XLS"
                 })
-
         # --- Sección 3: Tabla de Rechazo Interactiva ---
         if not rows_to_reject:
             st.success("Proceso completado. No se encontraron registros para rechazar.")
