@@ -37,8 +37,8 @@ CODE_DESC = {
 # NUEVA CONSTANTE para el layout del TXT de Scotiabank
 SCO_TXT_POS = {
     "dni": (2, 9),        # Posición del DNI
-    "nombre": (13, 63),   # Posición del Nombre
-    "importe": (86, 97),  # Posición del Importe
+    "nombre": (14, 73),   # Posición del Nombre
+    "importe": (105, 115),  # Posición del Importe
     "referencia": (116, 127), # Posición de Referencia
 }
 KEYWORDS_NO_TIT = [
