@@ -485,11 +485,8 @@ def tab_sco_processor():
     # 1. Carga de archivos
     pdf_file = st.file_uploader("PDF Detalle de orden", type="pdf", key="sco_pdf")
     txt_file = st.file_uploader("TXT Masivo", type="txt", key="sco_txt")
-    
-    # --- MODIFICACIÓN 1: XLS ahora es opcional ---
     xls_file = st.file_uploader("XLS Errores encontrados (Opcional)", type=["xls", "xlsx", "csv"], key="sco_xls")
 
-    # --- MODIFICACIÓN 2: El chequeo principal solo requiere PDF y TXT ---
     if not (pdf_file and txt_file):
         st.caption("Por favor, cargue al menos los archivos PDF y TXT.")
         return
@@ -507,35 +504,28 @@ def tab_sco_processor():
         st.subheader("Resumen de la Orden (PDF)")
         col1, col2 = st.columns(2)
         
-        # Columna 1 (Nro. Orden - Sin cambios)
+        # Columna 1 (Nro. Orden)
         with col1:
             orden_match = re.search(r"Detalle de orden No\.\s+(\d+)", pdf_text_fitz)
             orden_fija = f"9242{orden_match.group(1)}" if orden_match else "No encontrado"
             st.text_input("Nro. Orden (Formato Fijo)", orden_fija, key="sco_orden")
         
-        # --- MODIFICACIÓN 3: Cambios en Columna 2 (Cantidad y Monto) ---
+        # Columna 2 (Cantidad y Monto)
         with col2:
-            # Asumimos que el formato es: "Total de la orden [CANTIDAD] [MONTO]"
-            
-            # 1. Regex para la Cantidad (el primer número)
             cantidad_match = re.search(r"Total de la orden\s+([\d,\.]+)", pdf_text_fitz)
             cantidad_str = cantidad_match.group(1) if cantidad_match else "No encontrado"
             
-            # 2. Regex para el Monto (el segundo número, que es el que quieres)
             monto_match = re.search(r"Total de la orden\s+[\d,\.]+\s+([\d,\.]+)", pdf_text_fitz)
             monto_str = f"S/ {monto_match.group(1)}" if monto_match else "No encontrado"
 
-            # Si el regex de monto falla (quizás solo hay 1 número), usamos el de cantidad
             if monto_str == "No encontrado" and cantidad_str != "No encontrado":
                 monto_str = f"S/ {cantidad_str}"
-                cantidad_str = "N/A" # No se encontró un conteo separado
+                cantidad_str = "N/A"
 
-            # 3. Mostrar ambos campos con los labels correctos
             st.text_input("Cantidad de Ordenes", cantidad_str, key="sco_cantidad")
             st.text_input("Monto Total de Orden", monto_str, key="sco_total")
 
-
-        # --- Preparación de datos TXT (Sin cambios) ---
+        # --- Preparación de datos TXT ---
         txt_lines = txt_file.read().decode("utf-8", errors="ignore").splitlines()
         
         dni_map = {
@@ -549,30 +539,51 @@ def tab_sco_processor():
         
         rows_to_reject = []
 
-        # --- Fuente A: Errores desde el PDF (Sin cambios) ---
+        # --- Fuente A: Errores desde el PDF (Usando pdfplumber) ---
         try:
             pdf_file.seek(0)
+            
             with pdfplumber.open(pdf_file) as pdf:
                 for page in pdf.pages:
                     table = page.extract_table()
                     if not table:
-                        continue 
+                        continue  
                     
                     for row in table:
-                        if not row or row[0] == "Documento":
-                            continue 
+                        # Saltar cabeceras (buscamos 'Documento' en la primera celda)
+                        if not row or str(row[0]).startswith("Documento"):
+                            continue
                         
                         dni = str(row[0]).replace("\n", "")
-                        estado_raw = str(row[5]).replace("\n", " ")
+                        
+                        # --- MODIFICACIÓN AQUÍ ---
+                        # Manejar dinámicamente el layout de 5 o 6 columnas
+                        estado_raw = ""
+                        if len(row) >= 6:
+                            # Layout de 6 columnas (Importe y Forma de Pago separados)
+                            estado_raw = str(row[5]).replace("\n", " ")
+                        elif len(row) == 5:
+                            # Layout de 5 columnas (Importe y Forma de Pago fusionados)
+                            estado_raw = str(row[4]).replace("\n", " ")
+                        else:
+                            continue # Layout desconocido, saltar fila
+                        # --- FIN DE LA MODIFICACIÓN ---
+
+                        # Normalizamos caracteres griegos (Omicron y Kappa)
                         estado_norm = estado_raw.upper().replace("Ο", "O").replace("Κ", "K")
 
+                        # Si está O.K., la saltamos
                         if "O.K." in estado_norm:
                             continue
                         
+                        # Asignamos código de rechazo por defecto
                         code, desc = "R002", "CUENTA INVALIDA"
+                        
+                        # Asignamos error específico
                         if "CTA ES CTS" in estado_norm:
                             code, desc = "R017", "CUENTA DE AFP / CTS"
                         
+                        # Si es un error, buscar DNI en el TXT y añadir a la lista
                         if dni in dni_map:
                             txt_line = dni_map[dni]
                             rows_to_reject.append({
@@ -588,8 +599,7 @@ def tab_sco_processor():
             st.error(f"Error fatal al procesar la tabla del PDF con pdfplumber: {e}")
             return
 
-
-        # --- MODIFICACIÓN 4: Fuente B (XLS) ahora es condicional ---
+        # --- Fuente B: Errores desde el XLS (Opcional) ---
         if xls_file:
             try:
                 st.caption("Procesando archivo XLS opcional...")
@@ -621,19 +631,15 @@ def tab_sco_processor():
                         })
             
             except Exception as e:
-                # Si falla, solo advertimos, no detenemos el proceso
                 st.warning(f"No se pudo leer el archivo XLS (opcional): {e}")
                 st.warning("El proceso continuará solo con los datos del PDF.")
 
-
-        # --- Sección 3: Tabla de Rechazo Interactiva (Sin cambios) ---
+        # --- Sección 3: Tabla de Rechazo Interactiva ---
         if not rows_to_reject:
             st.success("Proceso completado. No se encontraron registros para rechazar.")
             return
 
         df_out = pd.DataFrame(rows_to_reject)
-        
-        # Eliminar duplicados (priorizando XLS si existe)
         df_out = df_out.drop_duplicates(subset=["dni/cex"], keep="last")
         
         st.subheader("Registros a Rechazar (Editables)")
@@ -660,7 +666,7 @@ def tab_sco_processor():
             key="editor_sco"
         )
         
-        # --- Construcción y envío final (Sin cambios) ---
+        # --- Construcción y envío final ---
         df_final = edited_df.copy()
         df_final["Estado"] = ESTADO
         df_final["Descripcion de Rechazo"] = df_final["Codigo de Rechazo"].map(CODE_DESC)
