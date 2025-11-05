@@ -485,7 +485,7 @@ def tab_sco_processor():
     # 1. Carga de archivos
     pdf_file = st.file_uploader("PDF Detalle de orden", type="pdf", key="sco_pdf")
     txt_file = st.file_uploader("TXT Masivo", type="txt", key="sco_txt")
-    xls_file = st.file_uploader("XLS Errores encontrados (Opcional)", type=["xls", "xlsx", "csv"], key="sco_xls")
+    xls_file = st.file_uploader("XLS Errores encontrados", type=["xls", "xlsx", "csv"], key="sco_xls")
 
     if not (pdf_file and txt_file):
         st.caption("Por favor, cargue al menos los archivos PDF y TXT.")
@@ -602,10 +602,10 @@ def tab_sco_processor():
                 st.write(sorted(list(dnis_not_in_txt)))
 
 
-        # --- Fuente B: Errores desde el XLS (Opcional) ---
+        # --- Fuente B: Errores desde el XLS ---
         if xls_file:
             try:
-                st.caption("Procesando archivo XLS opcional...")
+                st.caption("Procesando archivo XLS ...")
                 df_xls = pd.read_excel(xls_file, header=6, dtype=str)
                 
                 for _, row in df_xls.iterrows():
@@ -636,7 +636,7 @@ def tab_sco_processor():
                     # (Nota: Aquí también podríamos añadir una advertencia si line_num no está en line_num_map)
 
             except Exception as e:
-                st.warning(f"No se pudo leer el archivo XLS (opcional): {e}")
+                st.warning(f"No se pudo leer el archivo XLS: {e}")
                 st.warning("El proceso continuará solo con los datos del PDF.")
 
 
