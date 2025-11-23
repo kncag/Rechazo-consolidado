@@ -644,7 +644,7 @@ def tab_sco_processor():
                                 # Intentamos extraer el texto del error para el log (última columna no vacía)
                                 try:
                                     estado_raw = next(s for s in reversed(clean_row) if s)
-                                exceptStopIteration:
+        except StopIteration:
                                     estado_raw = "Desconocido"
 
                                 if show_debug: 
