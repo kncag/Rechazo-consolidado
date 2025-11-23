@@ -545,11 +545,11 @@ def tab_sco_processor():
         try:
             pdf_file.seek(0)
             
-            # --- ESTRATEGIA "TEXTO PURO" ---
+            # --- ESTRATEGIA "TEXTO PURO" CORREGIDA ---
+            # Eliminamos 'keep_blank_chars' que causaba el error
             settings = {
                 "vertical_strategy": "text", 
                 "horizontal_strategy": "text",
-                "keep_blank_chars": True,
                 "x_tolerance": 3,
                 "y_tolerance": 3,
             }
@@ -615,7 +615,6 @@ def tab_sco_processor():
                                 es_error = True
                             
                             if es_error:
-                                # --- CORRECCIÓN AQUÍ: Se añadió el espacio en 'except StopIteration' ---
                                 try:
                                     estado_raw = next(s for s in reversed(clean_row) if s)
                                 except StopIteration:
