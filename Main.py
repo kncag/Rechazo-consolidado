@@ -554,8 +554,8 @@ def tab_sco_processor():
         rows_to_reject = []
         dnis_not_in_txt = set()
         debug_log = []
-        footer_total_found = None 
-        
+        footer_total_found = None # Para guardar el "15,164.11" si lo encontramos
+
         # --- CONTADORES NUEVOS ---
         count_detected = 0
         count_ok = 0
@@ -565,11 +565,13 @@ def tab_sco_processor():
         try:
             pdf_file.seek(0)
             
+            # --- CONFIGURACIÓN SIMPLIFICADA (Y VÁLIDA) ---
+            # Quitamos 'x_tolerance' y 'y_tolerance' que causaban el error.
+            # 'snap_tolerance' ayuda a alinear texto ligeramente desfasado.
             settings = {
                 "vertical_strategy": "text", 
                 "horizontal_strategy": "text",
-                "x_tolerance": 3,
-                "y_tolerance": 3,
+                "snap_tolerance": 3,
             }
 
             with pdfplumber.open(pdf_file) as pdf:
@@ -587,16 +589,19 @@ def tab_sco_processor():
                         for row in table:
                             if not row: continue
                             
+                            # Limpieza de la fila
                             clean_row = [str(cell or "").strip().replace("\n", " ") for cell in row]
                             
                             if all(cell == "" for cell in clean_row):
                                 continue
 
+                            # Búsqueda del DNI en la fila
                             dni = ""
                             dni_col_idx = -1
                             
                             for idx, cell in enumerate(clean_row):
-                                # Validaciones estrictas
+                                # Validamos que parezca un DNI (dígitos, largo > 5, sin barras de fecha)
+                                # Y que NO sea un monto (sin comas)
                                 if (len(cell) >= 6 and 
                                     any(c.isdigit() for c in cell) and 
                                     len(cell) < 15 and 
@@ -609,7 +614,7 @@ def tab_sco_processor():
                                         dni_col_idx = idx
                                         break
                                 
-                                # Captura de total footer
+                                # --- CAPTURA DE TOTAL DEL PIE DE PÁGINA ---
                                 if "," in cell and "." in cell and any(c.isdigit() for c in cell):
                                     try:
                                         val = parse_amount(cell)
@@ -623,6 +628,7 @@ def tab_sco_processor():
                                 if show_debug: debug_log.append(f"SKIP (No DNI): {clean_row}")
                                 continue
 
+                            # Filtro de Cabeceras
                             if "Documento" in dni or "Beneficiario" in dni:
                                 if show_debug: debug_log.append(f"SKIP (Cabecera): {clean_row}")
                                 continue
@@ -630,7 +636,7 @@ def tab_sco_processor():
                             # --- SI LLEGAMOS AQUÍ, ES UN REGISTRO VÁLIDO ---
                             count_detected += 1 # Incrementamos contador total
 
-                            # Búsqueda del Estado
+                            # --- BÚSQUEDA DEL ESTADO ---
                             estado_raw = ""
                             fila_texto_completa = " ".join(clean_row).upper()
                             fila_texto_norm = fila_texto_completa.replace("Ο", "O").replace("Κ", "K")
@@ -638,13 +644,11 @@ def tab_sco_processor():
                             # --- LÓGICA DE DECISIÓN ---
                             
                             if "O.K." in fila_texto_norm:
-                                count_ok += 1 # Incrementamos contador OK
+                                count_ok += 1
                                 if show_debug: debug_log.append(f"OK (Ignorado): DNI={dni}")
                                 continue
                             
-                            # Si no es OK, es un error
-                            count_error += 1 # Incrementamos contador Error
-                            
+                            count_error += 1
                             code, desc = "R002", "CUENTA INVALIDA"
                             tipo_error = "GENÉRICO"
                             es_error = False
@@ -652,29 +656,33 @@ def tab_sco_processor():
                             if "CTA ES CTS" in fila_texto_norm:
                                 code, desc = "R017", "CUENTA DE AFP / CTS"
                                 tipo_error = "CTS"
+                                es_error = True
+                            elif "O.K." not in fila_texto_norm:
+                                es_error = True
                             
-                            try:
-                                estado_raw = next(s for s in reversed(clean_row) if s)
-                            except StopIteration:
-                                estado_raw = "Desconocido"
+                            if es_error:
+                                try:
+                                    estado_raw = next(s for s in reversed(clean_row) if s)
+                                except StopIteration:
+                                    estado_raw = "Desconocido"
 
-                            if show_debug: 
-                                debug_log.append(f"🔴 ERROR DETECTADO ({tipo_error}): DNI={dni} | Estado='{estado_raw}'")
+                                if show_debug: 
+                                    debug_log.append(f"🔴 ERROR DETECTADO ({tipo_error}): DNI={dni} | Estado='{estado_raw}'")
 
-                            # Cruce con TXT
-                            if dni in dni_map:
-                                txt_line = dni_map[dni]
-                                rows_to_reject.append({
-                                    "dni/cex": dni,
-                                    "nombre": slice_fixed(txt_line, *SCO_TXT_POS["nombre"]),
-                                    "importe": parse_sco_importe(slice_fixed(txt_line, *SCO_TXT_POS["importe"])),
-                                    "Referencia": slice_fixed(txt_line, *SCO_TXT_POS["referencia"]),
-                                    "Codigo de Rechazo": code,
-                                    "Fuente": "PDF"
-                                })
-                            else:
-                                dnis_not_in_txt.add(dni)
-                                if show_debug: debug_log.append(f"⚠️ ADVERTENCIA: DNI {dni} no está en TXT.")
+                                # Cruce con TXT
+                                if dni in dni_map:
+                                    txt_line = dni_map[dni]
+                                    rows_to_reject.append({
+                                        "dni/cex": dni,
+                                        "nombre": slice_fixed(txt_line, *SCO_TXT_POS["nombre"]),
+                                        "importe": parse_sco_importe(slice_fixed(txt_line, *SCO_TXT_POS["importe"])),
+                                        "Referencia": slice_fixed(txt_line, *SCO_TXT_POS["referencia"]),
+                                        "Codigo de Rechazo": code,
+                                        "Fuente": "PDF"
+                                    })
+                                else:
+                                    dnis_not_in_txt.add(dni)
+                                    if show_debug: debug_log.append(f"⚠️ ADVERTENCIA: DNI {dni} no está en TXT.")
         
         except Exception as e:
             st.error(f"Error fatal al procesar el PDF: {e}")
