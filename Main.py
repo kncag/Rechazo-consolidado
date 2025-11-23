@@ -545,13 +545,13 @@ def tab_sco_processor():
         try:
             pdf_file.seek(0)
             
-            # --- ESTRATEGIA "TEXTO PURO" CORREGIDA ---
-            # Eliminamos 'keep_blank_chars' que causaba el error
+            # --- CONFIGURACIÓN SIMPLIFICADA (Y VÁLIDA) ---
+            # Quitamos 'x_tolerance' y 'y_tolerance' que causaban el error.
+            # 'snap_tolerance' ayuda a alinear texto ligeramente desfasado.
             settings = {
                 "vertical_strategy": "text", 
                 "horizontal_strategy": "text",
-                "x_tolerance": 3,
-                "y_tolerance": 3,
+                "snap_tolerance": 3,
             }
 
             with pdfplumber.open(pdf_file) as pdf:
@@ -569,15 +569,18 @@ def tab_sco_processor():
                         for row in table:
                             if not row: continue
                             
+                            # Limpieza de la fila
                             clean_row = [str(cell or "").strip().replace("\n", " ") for cell in row]
                             
                             if all(cell == "" for cell in clean_row):
                                 continue
 
+                            # Búsqueda del DNI en la fila
                             dni = ""
                             dni_col_idx = -1
                             
                             for idx, cell in enumerate(clean_row):
+                                # Validamos que parezca un DNI (dígitos, largo > 5, sin barras de fecha)
                                 if len(cell) >= 6 and any(c.isdigit() for c in cell) and len(cell) < 15:
                                     if "/" not in cell: 
                                         dni = cell
@@ -588,6 +591,7 @@ def tab_sco_processor():
                                 if show_debug: debug_log.append(f"SKIP (No DNI): {clean_row}")
                                 continue
 
+                            # Filtro de Cabeceras
                             if "Documento" in dni or "Beneficiario" in dni:
                                 if show_debug: debug_log.append(f"SKIP (Cabecera): {clean_row}")
                                 continue
