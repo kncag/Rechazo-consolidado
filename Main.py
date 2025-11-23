@@ -485,7 +485,10 @@ def tab_sco_processor():
     # 1. Carga de archivos
     pdf_file = st.file_uploader("PDF Detalle de orden", type="pdf", key="sco_pdf")
     txt_file = st.file_uploader("TXT Masivo", type="txt", key="sco_txt")
-    xls_file = st.file_uploader("XLS Errores encontrados", type=["xls", "xlsx", "csv"], key="sco_xls")
+    xls_file = st.file_uploader("XLS Errores encontrados (Opcional)", type=["xls", "xlsx", "csv"], key="sco_xls")
+
+    # --- NUEVO: Interruptor para mostrar el log de lectura ---
+    show_debug = st.toggle("🛠️ Mostrar log de lectura del PDF (Debug)", value=False) 
 
     if not (pdf_file and txt_file):
         st.caption("Por favor, cargue al menos los archivos PDF y TXT.")
@@ -504,13 +507,13 @@ def tab_sco_processor():
         st.subheader("Resumen de la Orden (PDF)")
         col1, col2 = st.columns(2)
         
-        # Columna 1 (Nro. Orden)
+        # Columna 1
         with col1:
             orden_match = re.search(r"Detalle de orden No\.\s+(\d+)", pdf_text_fitz)
             orden_fija = f"9242{orden_match.group(1)}" if orden_match else "No encontrado"
             st.text_input("Nro. Orden (Formato Fijo)", orden_fija, key="sco_orden")
         
-        # Columna 2 (Cantidad y Monto)
+        # Columna 2
         with col2:
             cantidad_match = re.search(r"Total de la orden\s+([\d,\.]+)", pdf_text_fitz)
             cantidad_str = cantidad_match.group(1) if cantidad_match else "No encontrado"
@@ -538,44 +541,66 @@ def tab_sco_processor():
         }
         
         rows_to_reject = []
-        
-        # --- MODIFICACIÓN 1: Inicializar un set para guardar DNIs no encontrados ---
         dnis_not_in_txt = set()
+        
+        # --- Variable para guardar el log del PDF ---
+        debug_log = [] # <--- DEBUG: Iniciamos lista vacía
 
         # --- Fuente A: Errores desde el PDF (Usando pdfplumber) ---
         try:
             pdf_file.seek(0)
             
             with pdfplumber.open(pdf_file) as pdf:
-                for page in pdf.pages:
+                for i, page in enumerate(pdf.pages):
                     table = page.extract_table()
                     if not table:
+                        if show_debug: debug_log.append(f"[Página {i+1}] No se encontró tabla.")
                         continue  
                     
+                    if show_debug: debug_log.append(f"--- [Página {i+1}] Iniciando lectura de tabla ---")
+
                     for row in table:
+                        # Saltar filas vacías o cabeceras
                         if not row or str(row[0]).startswith("Documento"):
+                            if show_debug: debug_log.append(f"SKIP (Cabecera/Vacío): {row}")
                             continue
                         
                         dni = str(row[0]).replace("\n", "")
+                        
+                        # Determinar estado crudo
                         estado_raw = ""
+                        col_idx = -1 # Para saber de qué columna sacamos el dato
                         
                         if len(row) >= 6:
                             estado_raw = str(row[5]).replace("\n", " ")
+                            col_idx = 6
                         elif len(row) == 5:
                             estado_raw = str(row[4]).replace("\n", " ")
+                            col_idx = 5
                         else:
+                            if show_debug: debug_log.append(f"SKIP (Columnas inusuales len={len(row)}): {row}")
                             continue 
 
+                        # Normalizar
                         estado_norm = estado_raw.upper().replace("Ο", "O").replace("Κ", "K")
 
+                        # --- LÓGICA DE DECISIÓN Y LOGGING ---
                         if "O.K." in estado_norm:
+                            if show_debug: debug_log.append(f"OK (Ignorado): DNI={dni} | EstadoLeido='{estado_raw}'")
                             continue
                         
                         code, desc = "R002", "CUENTA INVALIDA"
+                        tipo_error = "GENÉRICO"
+                        
                         if "CTA ES CTS" in estado_norm:
                             code, desc = "R017", "CUENTA DE AFP / CTS"
+                            tipo_error = "CTS"
                         
-                        # --- MODIFICACIÓN 2: Añadir el 'else' para capturar DNIs faltantes ---
+                        # Log del error encontrado
+                        if show_debug: 
+                            debug_log.append(f"🔴 ERROR DETECTADO ({tipo_error}): DNI={dni} | EstadoLeido='{estado_raw}' | Code={code}")
+
+                        # Buscar en TXT
                         if dni in dni_map:
                             txt_line = dni_map[dni]
                             rows_to_reject.append({
@@ -587,39 +612,43 @@ def tab_sco_processor():
                                 "Fuente": "PDF"
                             })
                         else:
-                            # Si el DNI no está en el TXT, lo guardamos para advertir
                             dnis_not_in_txt.add(dni)
+                            if show_debug: debug_log.append(f"⚠️ ADVERTENCIA: DNI {dni} no encontrado en TXT.")
         
         except Exception as e:
             st.error(f"Error fatal al procesar la tabla del PDF con pdfplumber: {e}")
             return
 
-        # --- MODIFICACIÓN 3: Mostrar la advertencia si hubo DNIs faltantes ---
+        # --- MOSTRAR EL LOG SI ESTÁ ACTIVADO ---
+        if show_debug:
+            st.divider()
+            st.subheader("🛠️ Log de Lectura del PDF")
+            st.text_area(
+                "Contenido leído línea por línea:", 
+                value="\n".join(debug_log), 
+                height=300
+            )
+            st.divider()
+
+        # --- Advertencias de DNI ---
         if dnis_not_in_txt:
-            st.warning("⚠️ **Advertencia:** Se encontraron DNIs en el PDF que no existen en el archivo TXT. Estos registros no se pueden procesar.")
-            st.caption("Esto suele ocurrir si los archivos PDF y TXT no son de la misma orden (ej. PDF de orden 0697 y TXT de orden 0973).")
+            st.warning("⚠️ **Advertencia:** Se encontraron DNIs en el PDF que no existen en el archivo TXT.")
             with st.expander("Ver DNIs no encontrados en el TXT"):
                 st.write(sorted(list(dnis_not_in_txt)))
 
-
-        # --- Fuente B: Errores desde el XLS ---
+        # --- Fuente B: XLS (Opcional) ---
         if xls_file:
             try:
-                st.caption("Procesando archivo XLS ...")
+                # st.caption("Procesando archivo XLS opcional...") # Comentado para limpiar UI
                 df_xls = pd.read_excel(xls_file, header=6, dtype=str)
                 
                 for _, row in df_xls.iterrows():
                     line_num_str = row.iloc[0]
-                    if pd.isna(line_num_str):
-                        continue
-                    
-                    try:
-                        line_num = int(float(line_num_str))
-                    except ValueError:
-                        continue 
+                    if pd.isna(line_num_str): continue
+                    try: line_num = int(float(line_num_str))
+                    except ValueError: continue 
 
                     observation = row.iloc[3]
-                    
                     if line_num in line_num_map:
                         txt_line = line_num_map[line_num]
                         code, desc = map_sco_xls_error_to_code(observation)
@@ -632,36 +661,25 @@ def tab_sco_processor():
                             "Codigo de Rechazo": code,
                             "Fuente": "XLS"
                         })
-                    
-                    # (Nota: Aquí también podríamos añadir una advertencia si line_num no está en line_num_map)
-
             except Exception as e:
-                st.warning(f"No se pudo leer el archivo XLS: {e}")
-                st.warning("El proceso continuará solo con los datos del PDF.")
+                st.warning(f"No se pudo leer el archivo XLS (opcional): {e}")
 
-
-        # --- Sección 3: Tabla de Rechazo Interactiva ---
+        # --- Resultado Final ---
         if not rows_to_reject:
             st.success("Proceso completado. No se encontraron registros para rechazar.")
-            st.caption("(Si esperaba registros, verifique las advertencias de cruce de datos más arriba).")
             return
 
         df_out = pd.DataFrame(rows_to_reject)
         df_out = df_out.drop_duplicates(subset=["dni/cex"], keep="last")
         
         st.subheader("Registros a Rechazar (Editables)")
-        st.caption("Los códigos de rechazo han sido pre-asignados. Puedes cambiarlos individualmente.")
-
+        
         valid_codes = list(CODE_DESC.keys())
         
         edited_df = st.data_editor(
             df_out,
             column_config={
-                "Codigo de Rechazo": st.column_config.SelectboxColumn(
-                    "Código de Rechazo",
-                    options=valid_codes,
-                    required=True,
-                ),
+                "Codigo de Rechazo": st.column_config.SelectboxColumn("Código de Rechazo", options=valid_codes, required=True),
                 "Fuente": st.column_config.TextColumn("Fuente", disabled=True),
                 "dni/cex": st.column_config.TextColumn("DNI/CEX", disabled=True),
                 "nombre": st.column_config.TextColumn("Nombre", disabled=True),
@@ -673,11 +691,9 @@ def tab_sco_processor():
             key="editor_sco"
         )
         
-        # --- Construcción y envío final ---
         df_final = edited_df.copy()
         df_final["Estado"] = ESTADO
         df_final["Descripcion de Rechazo"] = df_final["Codigo de Rechazo"].map(CODE_DESC)
-        
         df_final = df_final[OUT_COLS]
 
         cnt, total = _count_and_sum(df_final)
@@ -687,13 +703,7 @@ def tab_sco_processor():
         
         col1, col2 = st.columns(2)
         with col2:
-            st.download_button(
-                "Descargar excel de rechazos",
-                eb,
-                file_name="rechazos_sco.xlsx",
-                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                use_container_width=True
-            )
+            st.download_button("Descargar excel de rechazos", eb, file_name="rechazos_sco.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", use_container_width=True)
         with col1:
             _validate_and_post(df_final, "post_sco")
 # -------------- Render pestañas --------------
