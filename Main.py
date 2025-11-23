@@ -487,7 +487,6 @@ def tab_sco_processor():
     txt_file = st.file_uploader("TXT Masivo", type="txt", key="sco_txt")
     xls_file = st.file_uploader("XLS Errores encontrados (Opcional)", type=["xls", "xlsx", "csv"], key="sco_xls")
 
-    # --- NUEVO: Interruptor para mostrar el log de lectura ---
     show_debug = st.toggle("🛠️ Mostrar log de lectura del PDF (Debug)", value=False) 
 
     if not (pdf_file and txt_file):
@@ -507,13 +506,11 @@ def tab_sco_processor():
         st.subheader("Resumen de la Orden (PDF)")
         col1, col2 = st.columns(2)
         
-        # Columna 1
         with col1:
             orden_match = re.search(r"Detalle de orden No\.\s+(\d+)", pdf_text_fitz)
             orden_fija = f"9242{orden_match.group(1)}" if orden_match else "No encontrado"
             st.text_input("Nro. Orden (Formato Fijo)", orden_fija, key="sco_orden")
         
-        # Columna 2
         with col2:
             cantidad_match = re.search(r"Total de la orden\s+([\d,\.]+)", pdf_text_fitz)
             cantidad_str = cantidad_match.group(1) if cantidad_match else "No encontrado"
@@ -542,9 +539,7 @@ def tab_sco_processor():
         
         rows_to_reject = []
         dnis_not_in_txt = set()
-        
-        # --- Variable para guardar el log del PDF ---
-        debug_log = [] # <--- DEBUG: Iniciamos lista vacía
+        debug_log = []
 
         # --- Fuente A: Errores desde el PDF (Usando pdfplumber) ---
         try:
@@ -552,96 +547,102 @@ def tab_sco_processor():
             
             with pdfplumber.open(pdf_file) as pdf:
                 for i, page in enumerate(pdf.pages):
-                    table = page.extract_table()
-                    if not table:
-                        if show_debug: debug_log.append(f"[Página {i+1}] No se encontró tabla.")
-                        continue  
+                    # --- MODIFICACIÓN CRÍTICA: USAR extract_tables() EN PLURAL ---
+                    # Esto captura TODAS las tablas de la página, no solo la más grande.
+                    tables = page.extract_tables()
                     
-                    if show_debug: debug_log.append(f"--- [Página {i+1}] Iniciando lectura de tabla ---")
+                    if not tables:
+                        if show_debug: debug_log.append(f"[Página {i+1}] No se encontraron tablas.")
+                        continue
+                    
+                    if show_debug: debug_log.append(f"--- [Página {i+1}] Se encontraron {len(tables)} fragmentos de tabla ---")
 
-                    for row in table:
-                        # Saltar filas vacías o cabeceras
-                        if not row or str(row[0]).startswith("Documento"):
-                            if show_debug: debug_log.append(f"SKIP (Cabecera/Vacío): {row}")
-                            continue
-                        
-                        dni = str(row[0]).replace("\n", "")
-                        
-                        # Determinar estado crudo
-                        estado_raw = ""
-                        col_idx = -1 # Para saber de qué columna sacamos el dato
-                        
-                        if len(row) >= 6:
-                            estado_raw = str(row[5]).replace("\n", " ")
-                            col_idx = 6
-                        elif len(row) == 5:
-                            estado_raw = str(row[4]).replace("\n", " ")
-                            col_idx = 5
-                        else:
-                            if show_debug: debug_log.append(f"SKIP (Columnas inusuales len={len(row)}): {row}")
-                            continue 
+                    # Iteramos sobre CADA tabla encontrada en la página
+                    for t_idx, table in enumerate(tables):
+                        for row in table:
+                            # Filtros básicos de validez
+                            if not row: continue
+                            
+                            # Limpieza de datos
+                            col0_text = str(row[0] or "").replace("\n", "").strip()
+                            
+                            # Saltar cabeceras
+                            if col0_text.startswith("Documento") or col0_text.startswith("Sel"):
+                                if show_debug: debug_log.append(f"SKIP (Cabecera): {row}")
+                                continue
+                            
+                            # Validación simple de DNI (debe tener al menos 6 dígitos para ser real)
+                            if len(col0_text) < 6 or not any(char.isdigit() for char in col0_text):
+                                if show_debug: debug_log.append(f"SKIP (No parece DNI): '{col0_text}' en {row}")
+                                continue
+                            
+                            dni = col0_text
+                            
+                            # Determinar estado y layout
+                            estado_raw = ""
+                            
+                            if len(row) >= 6:
+                                estado_raw = str(row[5] or "").replace("\n", " ")
+                            elif len(row) == 5:
+                                estado_raw = str(row[4] or "").replace("\n", " ")
+                            else:
+                                if show_debug: debug_log.append(f"SKIP (Columnas insuficientes len={len(row)}): {row}")
+                                continue 
 
-                        # Normalizar
-                        estado_norm = estado_raw.upper().replace("Ο", "O").replace("Κ", "K")
+                            # Normalizar
+                            estado_norm = estado_raw.upper().replace("Ο", "O").replace("Κ", "K")
 
-                        # --- LÓGICA DE DECISIÓN Y LOGGING ---
-                        if "O.K." in estado_norm:
-                            if show_debug: debug_log.append(f"OK (Ignorado): DNI={dni} | EstadoLeido='{estado_raw}'")
-                            continue
-                        
-                        code, desc = "R002", "CUENTA INVALIDA"
-                        tipo_error = "GENÉRICO"
-                        
-                        if "CTA ES CTS" in estado_norm:
-                            code, desc = "R017", "CUENTA DE AFP / CTS"
-                            tipo_error = "CTS"
-                        
-                        # Log del error encontrado
-                        if show_debug: 
-                            debug_log.append(f"🔴 ERROR DETECTADO ({tipo_error}): DNI={dni} | EstadoLeido='{estado_raw}' | Code={code}")
+                            # --- LÓGICA DE DECISIÓN ---
+                            if "O.K." in estado_norm:
+                                if show_debug: debug_log.append(f"OK (Ignorado): DNI={dni} | Estado='{estado_raw}'")
+                                continue
+                            
+                            code, desc = "R002", "CUENTA INVALIDA"
+                            tipo_error = "GENÉRICO"
+                            
+                            if "CTA ES CTS" in estado_norm:
+                                code, desc = "R017", "CUENTA DE AFP / CTS"
+                                tipo_error = "CTS"
+                            
+                            if show_debug: 
+                                debug_log.append(f"🔴 ERROR DETECTADO ({tipo_error}): DNI={dni} | Estado='{estado_raw}'")
 
-                        # Buscar en TXT
-                        if dni in dni_map:
-                            txt_line = dni_map[dni]
-                            rows_to_reject.append({
-                                "dni/cex": dni,
-                                "nombre": slice_fixed(txt_line, *SCO_TXT_POS["nombre"]),
-                                "importe": parse_sco_importe(slice_fixed(txt_line, *SCO_TXT_POS["importe"])),
-                                "Referencia": slice_fixed(txt_line, *SCO_TXT_POS["referencia"]),
-                                "Codigo de Rechazo": code,
-                                "Fuente": "PDF"
-                            })
-                        else:
-                            dnis_not_in_txt.add(dni)
-                            if show_debug: debug_log.append(f"⚠️ ADVERTENCIA: DNI {dni} no encontrado en TXT.")
+                            # Cruce con TXT
+                            if dni in dni_map:
+                                txt_line = dni_map[dni]
+                                rows_to_reject.append({
+                                    "dni/cex": dni,
+                                    "nombre": slice_fixed(txt_line, *SCO_TXT_POS["nombre"]),
+                                    "importe": parse_sco_importe(slice_fixed(txt_line, *SCO_TXT_POS["importe"])),
+                                    "Referencia": slice_fixed(txt_line, *SCO_TXT_POS["referencia"]),
+                                    "Codigo de Rechazo": code,
+                                    "Fuente": "PDF"
+                                })
+                            else:
+                                dnis_not_in_txt.add(dni)
+                                if show_debug: debug_log.append(f"⚠️ ADVERTENCIA: DNI {dni} no está en TXT.")
         
         except Exception as e:
-            st.error(f"Error fatal al procesar la tabla del PDF con pdfplumber: {e}")
+            st.error(f"Error fatal al procesar el PDF: {e}")
             return
 
-        # --- MOSTRAR EL LOG SI ESTÁ ACTIVADO ---
+        # --- Mostrar Log (Debug) ---
         if show_debug:
             st.divider()
             st.subheader("🛠️ Log de Lectura del PDF")
-            st.text_area(
-                "Contenido leído línea por línea:", 
-                value="\n".join(debug_log), 
-                height=300
-            )
+            st.text_area("Detalle de lectura:", value="\n".join(debug_log), height=300)
             st.divider()
 
-        # --- Advertencias de DNI ---
+        # --- Advertencias ---
         if dnis_not_in_txt:
-            st.warning("⚠️ **Advertencia:** Se encontraron DNIs en el PDF que no existen en el archivo TXT.")
-            with st.expander("Ver DNIs no encontrados en el TXT"):
+            st.warning("⚠️ **Advertencia:** Se encontraron DNIs con error en el PDF que no existen en el TXT.")
+            with st.expander("Ver lista de DNIs faltantes"):
                 st.write(sorted(list(dnis_not_in_txt)))
 
         # --- Fuente B: XLS (Opcional) ---
         if xls_file:
             try:
-                # st.caption("Procesando archivo XLS opcional...") # Comentado para limpiar UI
                 df_xls = pd.read_excel(xls_file, header=6, dtype=str)
-                
                 for _, row in df_xls.iterrows():
                     line_num_str = row.iloc[0]
                     if pd.isna(line_num_str): continue
