@@ -545,14 +545,13 @@ def tab_sco_processor():
         try:
             pdf_file.seek(0)
             
-            # --- MODIFICACIÓN CRÍTICA: ESTRATEGIA "TEXTO PURO" ---
-            # Ignoramos las líneas gráficas. Definimos columnas por espacios en blanco.
+            # --- ESTRATEGIA "TEXTO PURO" ---
             settings = {
                 "vertical_strategy": "text", 
                 "horizontal_strategy": "text",
                 "keep_blank_chars": True,
-                "x_tolerance": 3, # Tolerancia horizontal
-                "y_tolerance": 3, # Tolerancia vertical (ayuda a agrupar líneas)
+                "x_tolerance": 3,
+                "y_tolerance": 3,
             }
 
             with pdfplumber.open(pdf_file) as pdf:
@@ -564,32 +563,22 @@ def tab_sco_processor():
                         if show_debug: debug_log.append(f"[Página {i+1}] No se encontraron tablas.")
                         continue
                     
-                    # Con estrategia 'text', debería encontrar 1 o pocas tablas grandes
                     if show_debug: debug_log.append(f"--- [Página {i+1}] Tablas detectadas: {len(tables)} ---")
 
                     for t_idx, table in enumerate(tables):
                         for row in table:
-                            # Filtro filas vacías o nulas
                             if not row: continue
                             
-                            # Convertimos la fila a una lista de strings limpios
-                            # (A veces 'text' strategy devuelve None en celdas vacías)
                             clean_row = [str(cell or "").strip().replace("\n", " ") for cell in row]
                             
-                            # Filtramos filas que están totalmente vacías
                             if all(cell == "" for cell in clean_row):
                                 continue
 
-                            # Tomamos el primer elemento no vacío como posible DNI
-                            # En strategy 'text', a veces el DNI cae en col 0 o col 1 dependiendo del margen
-                            # Buscamos la columna que parezca un DNI
                             dni = ""
                             dni_col_idx = -1
                             
                             for idx, cell in enumerate(clean_row):
-                                # Buscamos una celda que tenga numeros y longitud > 5
                                 if len(cell) >= 6 and any(c.isdigit() for c in cell) and len(cell) < 15:
-                                    # Verificamos que no sea una fecha (contiene /)
                                     if "/" not in cell: 
                                         dni = cell
                                         dni_col_idx = idx
@@ -599,25 +588,16 @@ def tab_sco_processor():
                                 if show_debug: debug_log.append(f"SKIP (No DNI): {clean_row}")
                                 continue
 
-                            # Filtro de Cabeceras
                             if "Documento" in dni or "Beneficiario" in dni:
                                 if show_debug: debug_log.append(f"SKIP (Cabecera): {clean_row}")
                                 continue
 
                             # --- BÚSQUEDA DEL ESTADO ---
-                            # Como 'text' strategy puede variar el número de columnas,
-                            # buscamos las palabras clave en CUALQUIER columna posterior al DNI.
-                            
                             estado_raw = ""
-                            estado_encontrado = False
-                            
-                            # Unimos todo el texto de la fila para buscar palabras clave
                             fila_texto_completa = " ".join(clean_row).upper()
-                            
-                            # Normalizamos griegos
                             fila_texto_norm = fila_texto_completa.replace("Ο", "O").replace("Κ", "K")
 
-                            # --- LÓGICA DE DECISIÓN (Sobre toda la fila) ---
+                            # --- LÓGICA DE DECISIÓN ---
                             
                             if "O.K." in fila_texto_norm:
                                 if show_debug: debug_log.append(f"OK (Ignorado): DNI={dni}")
@@ -627,24 +607,18 @@ def tab_sco_processor():
                             tipo_error = "GENÉRICO"
                             es_error = False
                             
-                            # Detectar errores específicos
                             if "CTA ES CTS" in fila_texto_norm:
                                 code, desc = "R017", "CUENTA DE AFP / CTS"
                                 tipo_error = "CTS"
                                 es_error = True
-                            # Si no dice OK y no dice CTS, pero parece una fila de datos válida, 
-                            # asumimos que es un error genérico (ej. "CUENTA CANCELADA", "DOC ERRADO")
-                            # La condición es: NO tiene OK.
                             elif "O.K." not in fila_texto_norm:
-                                # Validación extra: asegurarse que no sea basura
-                                # Scotiabank suele poner el mensaje de error en la última columna
                                 es_error = True
                             
                             if es_error:
-                                # Intentamos extraer el texto del error para el log (última columna no vacía)
+                                # --- CORRECCIÓN AQUÍ: Se añadió el espacio en 'except StopIteration' ---
                                 try:
                                     estado_raw = next(s for s in reversed(clean_row) if s)
-        except StopIteration:
+                                except StopIteration:
                                     estado_raw = "Desconocido"
 
                                 if show_debug: 
