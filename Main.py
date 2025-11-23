@@ -554,12 +554,13 @@ def tab_sco_processor():
         try:
             pdf_file.seek(0)
             
-            # Estrategia de Texto Puro
+            # --- CONFIGURACIÓN SIMPLIFICADA (Y VÁLIDA) ---
+            # Quitamos 'x_tolerance' y 'y_tolerance' que causaban el error.
+            # 'snap_tolerance' ayuda a alinear texto ligeramente desfasado.
             settings = {
                 "vertical_strategy": "text", 
                 "horizontal_strategy": "text",
-                "x_tolerance": 3,
-                "y_tolerance": 3,
+                "snap_tolerance": 3,
             }
 
             with pdfplumber.open(pdf_file) as pdf:
@@ -577,38 +578,36 @@ def tab_sco_processor():
                         for row in table:
                             if not row: continue
                             
+                            # Limpieza de la fila
                             clean_row = [str(cell or "").strip().replace("\n", " ") for cell in row]
                             
                             if all(cell == "" for cell in clean_row):
                                 continue
 
+                            # Búsqueda del DNI en la fila
                             dni = ""
                             dni_col_idx = -1
                             
                             for idx, cell in enumerate(clean_row):
-                                # --- MODIFICACIÓN: Validación de DNI más estricta ---
-                                # 1. Debe tener dígitos
-                                # 2. Longitud >= 6 y < 15
-                                # 3. NO debe tener comas (para evitar importes como 15,164.11)
-                                # 4. NO debe empezar con guiones (para evitar - 01 -)
+                                # Validamos que parezca un DNI (dígitos, largo > 5, sin barras de fecha)
+                                # Y que NO sea un monto (sin comas)
                                 if (len(cell) >= 6 and 
                                     any(c.isdigit() for c in cell) and 
                                     len(cell) < 15 and 
                                     "," not in cell and 
                                     not cell.startswith("-") and
                                     "VALORA" not in cell):
-                                    
+
                                     if "/" not in cell: 
                                         dni = cell
                                         dni_col_idx = idx
                                         break
                                 
                                 # --- CAPTURA DE TOTAL DEL PIE DE PÁGINA ---
-                                # Si no es DNI, pero parece un monto grande con coma y punto
                                 if "," in cell and "." in cell and any(c.isdigit() for c in cell):
                                     try:
                                         val = parse_amount(cell)
-                                        if val > 1000: # Heurística: si es mayor a 1000 podría ser el total
+                                        if val > 1000: 
                                             footer_total_found = val
                                             if show_debug: debug_log.append(f"💰 Posible Total encontrado en pie: {cell}")
                                     except:
@@ -618,6 +617,7 @@ def tab_sco_processor():
                                 if show_debug: debug_log.append(f"SKIP (No DNI): {clean_row}")
                                 continue
 
+                            # Filtro de Cabeceras
                             if "Documento" in dni or "Beneficiario" in dni:
                                 if show_debug: debug_log.append(f"SKIP (Cabecera): {clean_row}")
                                 continue
@@ -680,7 +680,6 @@ def tab_sco_processor():
             st.divider()
 
         # --- VALIDACIÓN DE TOTALES ---
-        # Si encontramos un total en el pie y coincide con el del encabezado
         if footer_total_found and header_total_val > 0:
             diff = abs(footer_total_found - header_total_val)
             if diff < 1.0: # Margen de error de 1 sol
