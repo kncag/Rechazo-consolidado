@@ -554,9 +554,9 @@ def tab_sco_processor():
         rows_to_reject = []
         dnis_not_in_txt = set()
         debug_log = []
-        footer_total_found = None # Para guardar el "15,164.11" si lo encontramos
-
-        # --- CONTADORES NUEVOS ---
+        footer_total_found = None 
+        
+        # --- CONTADORES ---
         count_detected = 0
         count_ok = 0
         count_error = 0
@@ -565,9 +565,7 @@ def tab_sco_processor():
         try:
             pdf_file.seek(0)
             
-            # --- CONFIGURACIÓN SIMPLIFICADA (Y VÁLIDA) ---
-            # Quitamos 'x_tolerance' y 'y_tolerance' que causaban el error.
-            # 'snap_tolerance' ayuda a alinear texto ligeramente desfasado.
+            # --- ESTRATEGIA "TEXTO PURO" ---
             settings = {
                 "vertical_strategy": "text", 
                 "horizontal_strategy": "text",
@@ -600,13 +598,13 @@ def tab_sco_processor():
                             dni_col_idx = -1
                             
                             for idx, cell in enumerate(clean_row):
-                                # Validamos que parezca un DNI (dígitos, largo > 5, sin barras de fecha)
-                                # Y que NO sea un monto (sin comas)
+                                # Validaciones estrictas para evitar basura como "E - 01 -" o montos
                                 if (len(cell) >= 6 and 
                                     any(c.isdigit() for c in cell) and 
                                     len(cell) < 15 and 
-                                    "," not in cell and 
-                                    not cell.startswith("-") and
+                                    "," not in cell and         # No montos con coma
+                                    "." not in cell and         # No montos con punto (15.00)
+                                    "-" not in cell and         # No guiones (evita "E - 01 -")
                                     "VALORA" not in cell):
 
                                     if "/" not in cell: 
@@ -614,7 +612,7 @@ def tab_sco_processor():
                                         dni_col_idx = idx
                                         break
                                 
-                                # --- CAPTURA DE TOTAL DEL PIE DE PÁGINA ---
+                                # Captura de total footer (Monto > 1000)
                                 if "," in cell and "." in cell and any(c.isdigit() for c in cell):
                                     try:
                                         val = parse_amount(cell)
@@ -633,10 +631,10 @@ def tab_sco_processor():
                                 if show_debug: debug_log.append(f"SKIP (Cabecera): {clean_row}")
                                 continue
 
-                            # --- SI LLEGAMOS AQUÍ, ES UN REGISTRO VÁLIDO ---
-                            count_detected += 1 # Incrementamos contador total
+                            # --- REGISTRO VÁLIDO ---
+                            count_detected += 1
 
-                            # --- BÚSQUEDA DEL ESTADO ---
+                            # Búsqueda del Estado
                             estado_raw = ""
                             fila_texto_completa = " ".join(clean_row).upper()
                             fila_texto_norm = fila_texto_completa.replace("Ο", "O").replace("Κ", "K")
@@ -648,6 +646,7 @@ def tab_sco_processor():
                                 if show_debug: debug_log.append(f"OK (Ignorado): DNI={dni}")
                                 continue
                             
+                            # Si no es OK, es error
                             count_error += 1
                             code, desc = "R002", "CUENTA INVALIDA"
                             tipo_error = "GENÉRICO"
@@ -697,21 +696,19 @@ def tab_sco_processor():
         m2.metric("Pagos Exitosos (OK)", count_ok)
         m3.metric("Rechazos Detectados", count_error)
         
-        # Validación con el encabezado
         if header_qty_val > 0:
             delta = count_detected - header_qty_val
             m4.metric("Vs. Encabezado", f"{header_qty_val}", delta=delta, delta_color="inverse")
-            
             if delta == 0:
-                st.success(f"✅ ¡Cuadratura Perfecta! Se leyeron exactamente {count_detected} registros, igual que el encabezado.")
+                st.success(f"✅ Cuadratura Perfecta: {count_detected} registros leídos.")
             else:
-                st.warning(f"⚠️ Atención: El encabezado indica {header_qty_val} registros, pero se detectaron {count_detected}. Revise el log Debug.")
+                st.warning(f"⚠️ Atención: Diferencia de {delta} registros con el encabezado.")
         else:
             m4.metric("Vs. Encabezado", "N/A")
 
         st.divider()
 
-        # --- Mostrar Log (Debug) ---
+        # --- MOSTRAR LOG (SI TOGGLE ACTIVADO) ---
         if show_debug:
             st.subheader("🛠️ Log de Lectura del PDF")
             st.text_area("Detalle de lectura:", value="\n".join(debug_log), height=300)
@@ -721,7 +718,7 @@ def tab_sco_processor():
         if footer_total_found and header_total_val > 0:
             diff = abs(footer_total_found - header_total_val)
             if diff < 1.0: 
-                st.success(f"✅ Validación de Montos Exitosa: El total leído en el pie ({footer_total_found:,.2f}) coincide con el encabezado.")
+                st.success(f"✅ Validación de Montos Exitosa: El total en el pie ({footer_total_found:,.2f}) coincide con el encabezado.")
             else:
                 st.info(f"ℹ️ Nota: Total en pie ({footer_total_found:,.2f}) vs Encabezado ({header_total_val:,.2f})")
 
