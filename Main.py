@@ -534,7 +534,7 @@ def tab_sco_processor():
                 monto_str = f"S/ {cantidad_str}"
                 header_total_val = parse_amount(cantidad_str)
                 cantidad_str = "N/A"
-                header_qty_val = 0 # No pudimos determinar cantidad confiablemente
+                header_qty_val = 0 
 
             st.text_input("Cantidad de Ordenes", cantidad_str, key="sco_cantidad")
             st.text_input("Monto Total de Orden", monto_str, key="sco_total")
@@ -598,13 +598,18 @@ def tab_sco_processor():
                             dni_col_idx = -1
                             
                             for idx, cell in enumerate(clean_row):
-                                # Validaciones estrictas para evitar basura como "E - 01 -" o montos
+                                # --- VALIDACIÓN CRÍTICA DE DNI ---
+                                # 1. Dígitos presentes
+                                # 2. Longitud (DNI=8, CEX=9-12)
+                                # 3. NO comas/puntos (Importes)
+                                # 4. NO guiones (Números de Cuenta o Basura)
+                                # 5. NO fechas (/)
                                 if (len(cell) >= 6 and 
                                     any(c.isdigit() for c in cell) and 
                                     len(cell) < 15 and 
-                                    "," not in cell and         # No montos con coma
-                                    "." not in cell and         # No montos con punto (15.00)
-                                    "-" not in cell and         # No guiones (evita "E - 01 -")
+                                    "," not in cell and 
+                                    "." not in cell and
+                                    "-" not in cell and  # <--- ESTO ELIMINA LAS CUENTAS (ej. 123-456)
                                     "VALORA" not in cell):
 
                                     if "/" not in cell: 
@@ -623,10 +628,10 @@ def tab_sco_processor():
                                         pass
 
                             if not dni:
-                                if show_debug: debug_log.append(f"SKIP (No DNI): {clean_row}")
+                                if show_debug: debug_log.append(f"SKIP (No DNI válido): {clean_row}")
                                 continue
 
-                            # Filtro de Cabeceras
+                            # Filtro de Cabeceras (por si acaso)
                             if "Documento" in dni or "Beneficiario" in dni:
                                 if show_debug: debug_log.append(f"SKIP (Cabecera): {clean_row}")
                                 continue
@@ -702,7 +707,7 @@ def tab_sco_processor():
             if delta == 0:
                 st.success(f"✅ Cuadratura Perfecta: {count_detected} registros leídos.")
             else:
-                st.warning(f"⚠️ Atención: Diferencia de {delta} registros con el encabezado.")
+                st.warning(f"⚠️ Atención: Diferencia de {delta} registros con el encabezado. (Probablemente por filas desbordadas en el PDF)")
         else:
             m4.metric("Vs. Encabezado", "N/A")
 
@@ -714,7 +719,7 @@ def tab_sco_processor():
             st.text_area("Detalle de lectura:", value="\n".join(debug_log), height=300)
             st.divider()
 
-        # --- VALIDACIÓN DE TOTALES (Footer vs Header) ---
+        # --- VALIDACIÓN DE TOTALES ---
         if footer_total_found and header_total_val > 0:
             diff = abs(footer_total_found - header_total_val)
             if diff < 1.0: 
@@ -791,10 +796,10 @@ def tab_sco_processor():
 
         eb = df_to_excel_bytes(df_final)
         
-        col1, col2 = st.columns(2)
+        col1, col1 = st.columns(2)
         with col2:
             st.download_button("Descargar excel de rechazos", eb, file_name="rechazos_sco.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", use_container_width=True)
-        with col1:
+        with col2:
             _validate_and_post(df_final, "post_sco")
 # -------------- Render pestañas --------------
 tabs = st.tabs([
