@@ -545,48 +545,59 @@ def tab_sco_processor():
         try:
             pdf_file.seek(0)
             
+            # --- CONFIGURACIÓN CRÍTICA PARA UNIFICAR TABLAS ---
+            # 'vertical_strategy': 'lines' -> Usa las líneas verticales para separar columnas (DNI de Nombre).
+            # 'horizontal_strategy': 'text' -> Ignora las líneas horizontales y usa la alineación del texto para las filas.
+            settings = {
+                "vertical_strategy": "lines",
+                "horizontal_strategy": "text",
+                "snap_tolerance": 4,
+            }
+
             with pdfplumber.open(pdf_file) as pdf:
                 for i, page in enumerate(pdf.pages):
-                    # --- MODIFICACIÓN CRÍTICA: USAR extract_tables() EN PLURAL ---
-                    # Esto captura TODAS las tablas de la página, no solo la más grande.
-                    tables = page.extract_tables()
+                    
+                    # Usamos los settings aquí
+                    tables = page.extract_tables(table_settings=settings)
                     
                     if not tables:
                         if show_debug: debug_log.append(f"[Página {i+1}] No se encontraron tablas.")
                         continue
                     
-                    if show_debug: debug_log.append(f"--- [Página {i+1}] Se encontraron {len(tables)} fragmentos de tabla ---")
+                    # Con 'text' strategy, deberíamos encontrar MENOS tablas pero MÁS grandes
+                    if show_debug: debug_log.append(f"--- [Página {i+1}] Se encontraron {len(tables)} tabla(s) unificadas ---")
 
-                    # Iteramos sobre CADA tabla encontrada en la página
                     for t_idx, table in enumerate(tables):
                         for row in table:
-                            # Filtros básicos de validez
                             if not row: continue
                             
-                            # Limpieza de datos
+                            # Limpieza agresiva de datos
                             col0_text = str(row[0] or "").replace("\n", "").strip()
                             
-                            # Saltar cabeceras
-                            if col0_text.startswith("Documento") or col0_text.startswith("Sel"):
-                                if show_debug: debug_log.append(f"SKIP (Cabecera): {row}")
+                            # Filtro de Cabecera y Basura
+                            # A veces con 'text' strategy puede leer el título de la página como fila
+                            if "Documento" in col0_text or "Scotiabank" in col0_text or "Detalle" in col0_text:
+                                if show_debug: debug_log.append(f"SKIP (Cabecera/Titulo): {row}")
                                 continue
                             
-                            # Validación simple de DNI (debe tener al menos 6 dígitos para ser real)
+                            # Validación de DNI: Debe tener dígitos y longitud mínima
                             if len(col0_text) < 6 or not any(char.isdigit() for char in col0_text):
-                                if show_debug: debug_log.append(f"SKIP (No parece DNI): '{col0_text}' en {row}")
+                                # A veces lee filas vacías intermedias
                                 continue
                             
                             dni = col0_text
                             
-                            # Determinar estado y layout
+                            # Determinar estado
                             estado_raw = ""
                             
+                            # Al usar 'lines' strategy verticalmente, pdfplumber es más estricto con las columnas.
+                            # Verificamos si existe la columna esperada.
                             if len(row) >= 6:
                                 estado_raw = str(row[5] or "").replace("\n", " ")
                             elif len(row) == 5:
                                 estado_raw = str(row[4] or "").replace("\n", " ")
                             else:
-                                if show_debug: debug_log.append(f"SKIP (Columnas insuficientes len={len(row)}): {row}")
+                                if show_debug: debug_log.append(f"SKIP (Columnas raras len={len(row)}): {row}")
                                 continue 
 
                             # Normalizar
@@ -594,7 +605,7 @@ def tab_sco_processor():
 
                             # --- LÓGICA DE DECISIÓN ---
                             if "O.K." in estado_norm:
-                                if show_debug: debug_log.append(f"OK (Ignorado): DNI={dni} | Estado='{estado_raw}'")
+                                if show_debug: debug_log.append(f"OK (Ignorado): DNI={dni}")
                                 continue
                             
                             code, desc = "R002", "CUENTA INVALIDA"
