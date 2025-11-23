@@ -506,6 +506,9 @@ def tab_sco_processor():
         st.subheader("Resumen de la Orden (PDF)")
         col1, col2 = st.columns(2)
         
+        # Variables para validación cruzada final
+        header_total_val = 0.0
+        
         with col1:
             orden_match = re.search(r"Detalle de orden No\.\s+(\d+)", pdf_text_fitz)
             orden_fija = f"9242{orden_match.group(1)}" if orden_match else "No encontrado"
@@ -516,10 +519,15 @@ def tab_sco_processor():
             cantidad_str = cantidad_match.group(1) if cantidad_match else "No encontrado"
             
             monto_match = re.search(r"Total de la orden\s+[\d,\.]+\s+([\d,\.]+)", pdf_text_fitz)
-            monto_str = f"S/ {monto_match.group(1)}" if monto_match else "No encontrado"
+            if monto_match:
+                monto_str = f"S/ {monto_match.group(1)}"
+                header_total_val = parse_amount(monto_match.group(1)) # Guardamos valor numérico
+            else:
+                monto_str = "No encontrado"
 
             if monto_str == "No encontrado" and cantidad_str != "No encontrado":
                 monto_str = f"S/ {cantidad_str}"
+                header_total_val = parse_amount(cantidad_str)
                 cantidad_str = "N/A"
 
             st.text_input("Cantidad de Ordenes", cantidad_str, key="sco_cantidad")
@@ -540,18 +548,18 @@ def tab_sco_processor():
         rows_to_reject = []
         dnis_not_in_txt = set()
         debug_log = []
+        footer_total_found = None # Para guardar el "15,164.11" si lo encontramos
 
         # --- Fuente A: Errores desde el PDF (Usando pdfplumber) ---
         try:
             pdf_file.seek(0)
             
-            # --- CONFIGURACIÓN SIMPLIFICADA (Y VÁLIDA) ---
-            # Quitamos 'x_tolerance' y 'y_tolerance' que causaban el error.
-            # 'snap_tolerance' ayuda a alinear texto ligeramente desfasado.
+            # Estrategia de Texto Puro
             settings = {
                 "vertical_strategy": "text", 
                 "horizontal_strategy": "text",
-                "snap_tolerance": 3,
+                "x_tolerance": 3,
+                "y_tolerance": 3,
             }
 
             with pdfplumber.open(pdf_file) as pdf:
@@ -569,29 +577,47 @@ def tab_sco_processor():
                         for row in table:
                             if not row: continue
                             
-                            # Limpieza de la fila
                             clean_row = [str(cell or "").strip().replace("\n", " ") for cell in row]
                             
                             if all(cell == "" for cell in clean_row):
                                 continue
 
-                            # Búsqueda del DNI en la fila
                             dni = ""
                             dni_col_idx = -1
                             
                             for idx, cell in enumerate(clean_row):
-                                # Validamos que parezca un DNI (dígitos, largo > 5, sin barras de fecha)
-                                if len(cell) >= 6 and any(c.isdigit() for c in cell) and len(cell) < 15:
+                                # --- MODIFICACIÓN: Validación de DNI más estricta ---
+                                # 1. Debe tener dígitos
+                                # 2. Longitud >= 6 y < 15
+                                # 3. NO debe tener comas (para evitar importes como 15,164.11)
+                                # 4. NO debe empezar con guiones (para evitar - 01 -)
+                                if (len(cell) >= 6 and 
+                                    any(c.isdigit() for c in cell) and 
+                                    len(cell) < 15 and 
+                                    "," not in cell and 
+                                    not cell.startswith("-") and
+                                    "VALORA" not in cell):
+                                    
                                     if "/" not in cell: 
                                         dni = cell
                                         dni_col_idx = idx
                                         break
-                            
+                                
+                                # --- CAPTURA DE TOTAL DEL PIE DE PÁGINA ---
+                                # Si no es DNI, pero parece un monto grande con coma y punto
+                                if "," in cell and "." in cell and any(c.isdigit() for c in cell):
+                                    try:
+                                        val = parse_amount(cell)
+                                        if val > 1000: # Heurística: si es mayor a 1000 podría ser el total
+                                            footer_total_found = val
+                                            if show_debug: debug_log.append(f"💰 Posible Total encontrado en pie: {cell}")
+                                    except:
+                                        pass
+
                             if not dni:
                                 if show_debug: debug_log.append(f"SKIP (No DNI): {clean_row}")
                                 continue
 
-                            # Filtro de Cabeceras
                             if "Documento" in dni or "Beneficiario" in dni:
                                 if show_debug: debug_log.append(f"SKIP (Cabecera): {clean_row}")
                                 continue
@@ -652,6 +678,15 @@ def tab_sco_processor():
             st.subheader("🛠️ Log de Lectura del PDF")
             st.text_area("Detalle de lectura:", value="\n".join(debug_log), height=300)
             st.divider()
+
+        # --- VALIDACIÓN DE TOTALES ---
+        # Si encontramos un total en el pie y coincide con el del encabezado
+        if footer_total_found and header_total_val > 0:
+            diff = abs(footer_total_found - header_total_val)
+            if diff < 1.0: # Margen de error de 1 sol
+                st.success(f"✅ Validación de Montos Exitosa: El total leído en el pie ({footer_total_found:,.2f}) coincide con el encabezado.")
+            else:
+                st.info(f"ℹ️ Nota: Total en pie ({footer_total_found:,.2f}) vs Encabezado ({header_total_val:,.2f})")
 
         # --- Advertencias ---
         if dnis_not_in_txt:
