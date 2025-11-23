@@ -545,93 +545,125 @@ def tab_sco_processor():
         try:
             pdf_file.seek(0)
             
-            # --- CONFIGURACIÓN CRÍTICA PARA UNIFICAR TABLAS ---
-            # 'vertical_strategy': 'lines' -> Usa las líneas verticales para separar columnas (DNI de Nombre).
-            # 'horizontal_strategy': 'text' -> Ignora las líneas horizontales y usa la alineación del texto para las filas.
+            # --- MODIFICACIÓN CRÍTICA: ESTRATEGIA "TEXTO PURO" ---
+            # Ignoramos las líneas gráficas. Definimos columnas por espacios en blanco.
             settings = {
-                "vertical_strategy": "lines",
+                "vertical_strategy": "text", 
                 "horizontal_strategy": "text",
-                "snap_tolerance": 4,
+                "keep_blank_chars": True,
+                "x_tolerance": 3, # Tolerancia horizontal
+                "y_tolerance": 3, # Tolerancia vertical (ayuda a agrupar líneas)
             }
 
             with pdfplumber.open(pdf_file) as pdf:
                 for i, page in enumerate(pdf.pages):
                     
-                    # Usamos los settings aquí
                     tables = page.extract_tables(table_settings=settings)
                     
                     if not tables:
                         if show_debug: debug_log.append(f"[Página {i+1}] No se encontraron tablas.")
                         continue
                     
-                    # Con 'text' strategy, deberíamos encontrar MENOS tablas pero MÁS grandes
-                    if show_debug: debug_log.append(f"--- [Página {i+1}] Se encontraron {len(tables)} tabla(s) unificadas ---")
+                    # Con estrategia 'text', debería encontrar 1 o pocas tablas grandes
+                    if show_debug: debug_log.append(f"--- [Página {i+1}] Tablas detectadas: {len(tables)} ---")
 
                     for t_idx, table in enumerate(tables):
                         for row in table:
+                            # Filtro filas vacías o nulas
                             if not row: continue
                             
-                            # Limpieza agresiva de datos
-                            col0_text = str(row[0] or "").replace("\n", "").strip()
+                            # Convertimos la fila a una lista de strings limpios
+                            # (A veces 'text' strategy devuelve None en celdas vacías)
+                            clean_row = [str(cell or "").strip().replace("\n", " ") for cell in row]
                             
-                            # Filtro de Cabecera y Basura
-                            # A veces con 'text' strategy puede leer el título de la página como fila
-                            if "Documento" in col0_text or "Scotiabank" in col0_text or "Detalle" in col0_text:
-                                if show_debug: debug_log.append(f"SKIP (Cabecera/Titulo): {row}")
+                            # Filtramos filas que están totalmente vacías
+                            if all(cell == "" for cell in clean_row):
                                 continue
+
+                            # Tomamos el primer elemento no vacío como posible DNI
+                            # En strategy 'text', a veces el DNI cae en col 0 o col 1 dependiendo del margen
+                            # Buscamos la columna que parezca un DNI
+                            dni = ""
+                            dni_col_idx = -1
                             
-                            # Validación de DNI: Debe tener dígitos y longitud mínima
-                            if len(col0_text) < 6 or not any(char.isdigit() for char in col0_text):
-                                # A veces lee filas vacías intermedias
+                            for idx, cell in enumerate(clean_row):
+                                # Buscamos una celda que tenga numeros y longitud > 5
+                                if len(cell) >= 6 and any(c.isdigit() for c in cell) and len(cell) < 15:
+                                    # Verificamos que no sea una fecha (contiene /)
+                                    if "/" not in cell: 
+                                        dni = cell
+                                        dni_col_idx = idx
+                                        break
+                            
+                            if not dni:
+                                if show_debug: debug_log.append(f"SKIP (No DNI): {clean_row}")
                                 continue
+
+                            # Filtro de Cabeceras
+                            if "Documento" in dni or "Beneficiario" in dni:
+                                if show_debug: debug_log.append(f"SKIP (Cabecera): {clean_row}")
+                                continue
+
+                            # --- BÚSQUEDA DEL ESTADO ---
+                            # Como 'text' strategy puede variar el número de columnas,
+                            # buscamos las palabras clave en CUALQUIER columna posterior al DNI.
                             
-                            dni = col0_text
-                            
-                            # Determinar estado
                             estado_raw = ""
+                            estado_encontrado = False
                             
-                            # Al usar 'lines' strategy verticalmente, pdfplumber es más estricto con las columnas.
-                            # Verificamos si existe la columna esperada.
-                            if len(row) >= 6:
-                                estado_raw = str(row[5] or "").replace("\n", " ")
-                            elif len(row) == 5:
-                                estado_raw = str(row[4] or "").replace("\n", " ")
-                            else:
-                                if show_debug: debug_log.append(f"SKIP (Columnas raras len={len(row)}): {row}")
-                                continue 
+                            # Unimos todo el texto de la fila para buscar palabras clave
+                            fila_texto_completa = " ".join(clean_row).upper()
+                            
+                            # Normalizamos griegos
+                            fila_texto_norm = fila_texto_completa.replace("Ο", "O").replace("Κ", "K")
 
-                            # Normalizar
-                            estado_norm = estado_raw.upper().replace("Ο", "O").replace("Κ", "K")
-
-                            # --- LÓGICA DE DECISIÓN ---
-                            if "O.K." in estado_norm:
+                            # --- LÓGICA DE DECISIÓN (Sobre toda la fila) ---
+                            
+                            if "O.K." in fila_texto_norm:
                                 if show_debug: debug_log.append(f"OK (Ignorado): DNI={dni}")
                                 continue
                             
                             code, desc = "R002", "CUENTA INVALIDA"
                             tipo_error = "GENÉRICO"
+                            es_error = False
                             
-                            if "CTA ES CTS" in estado_norm:
+                            # Detectar errores específicos
+                            if "CTA ES CTS" in fila_texto_norm:
                                 code, desc = "R017", "CUENTA DE AFP / CTS"
                                 tipo_error = "CTS"
+                                es_error = True
+                            # Si no dice OK y no dice CTS, pero parece una fila de datos válida, 
+                            # asumimos que es un error genérico (ej. "CUENTA CANCELADA", "DOC ERRADO")
+                            # La condición es: NO tiene OK.
+                            elif "O.K." not in fila_texto_norm:
+                                # Validación extra: asegurarse que no sea basura
+                                # Scotiabank suele poner el mensaje de error en la última columna
+                                es_error = True
                             
-                            if show_debug: 
-                                debug_log.append(f"🔴 ERROR DETECTADO ({tipo_error}): DNI={dni} | Estado='{estado_raw}'")
+                            if es_error:
+                                # Intentamos extraer el texto del error para el log (última columna no vacía)
+                                try:
+                                    estado_raw = next(s for s in reversed(clean_row) if s)
+                                exceptStopIteration:
+                                    estado_raw = "Desconocido"
 
-                            # Cruce con TXT
-                            if dni in dni_map:
-                                txt_line = dni_map[dni]
-                                rows_to_reject.append({
-                                    "dni/cex": dni,
-                                    "nombre": slice_fixed(txt_line, *SCO_TXT_POS["nombre"]),
-                                    "importe": parse_sco_importe(slice_fixed(txt_line, *SCO_TXT_POS["importe"])),
-                                    "Referencia": slice_fixed(txt_line, *SCO_TXT_POS["referencia"]),
-                                    "Codigo de Rechazo": code,
-                                    "Fuente": "PDF"
-                                })
-                            else:
-                                dnis_not_in_txt.add(dni)
-                                if show_debug: debug_log.append(f"⚠️ ADVERTENCIA: DNI {dni} no está en TXT.")
+                                if show_debug: 
+                                    debug_log.append(f"🔴 ERROR DETECTADO ({tipo_error}): DNI={dni} | Estado='{estado_raw}'")
+
+                                # Cruce con TXT
+                                if dni in dni_map:
+                                    txt_line = dni_map[dni]
+                                    rows_to_reject.append({
+                                        "dni/cex": dni,
+                                        "nombre": slice_fixed(txt_line, *SCO_TXT_POS["nombre"]),
+                                        "importe": parse_sco_importe(slice_fixed(txt_line, *SCO_TXT_POS["importe"])),
+                                        "Referencia": slice_fixed(txt_line, *SCO_TXT_POS["referencia"]),
+                                        "Codigo de Rechazo": code,
+                                        "Fuente": "PDF"
+                                    })
+                                else:
+                                    dnis_not_in_txt.add(dni)
+                                    if show_debug: debug_log.append(f"⚠️ ADVERTENCIA: DNI {dni} no está en TXT.")
         
         except Exception as e:
             st.error(f"Error fatal al procesar el PDF: {e}")
