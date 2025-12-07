@@ -34,6 +34,7 @@ CODE_DESC = {
     "R002": "CUENTA INVALIDA",
     "R007": "RECHAZO POR CCI",
     "R017": "CUENTA DE AFP / CTS",
+    "R020": "BANCO INOPERATIVO",
 }
 # NUEVA CONSTANTE para el layout del TXT de Scotiabank
 SCO_TXT_POS = {
@@ -648,6 +649,76 @@ def tab_sco_processor():
 
     elif not pdf_file and not txt_file:
         st.info("👆 Carga los archivos arriba para comenzar.")
+        
+def tab_rechazo_total_txt():
+    st.header("Rechazo TOTAL (Banco Inoperativo)")
+    st.warning("⚠️ ESTA OPCIÓN RECHAZARÁ TODO EL ARCHIVO TXT CON EL CÓDIGO R020.")
+
+    txt_file = st.file_uploader("Cargar TXT Masivo para rechazar totalmente", type="txt", key="total_txt")
+    
+    if txt_file:
+        with st.spinner("Procesando rechazo total..."):
+            # Leer el archivo
+            content = txt_file.read().decode("utf-8", errors="ignore")
+            lines = content.splitlines()
+            
+            rows = []
+            for ln in lines:
+                # Saltamos líneas vacías
+                if not ln.strip():
+                    continue
+                
+                # Usamos las posiciones estándar (TXT_POS) para extraer la info
+                # Asegúrate de que TXT_POS esté definido arriba como en tus otros tabs
+                dni = slice_fixed(ln, *TXT_POS["dni"])
+                nombre = slice_fixed(ln, *TXT_POS["nombre"])
+                ref = slice_fixed(ln, *TXT_POS["referencia"])
+                imp = parse_amount(slice_fixed(ln, *TXT_POS["importe"]))
+                
+                rows.append({
+                    "dni/cex": dni,
+                    "nombre": nombre,
+                    "importe": imp,
+                    "Referencia": ref,
+                })
+
+            if not rows:
+                st.error("El archivo TXT parece estar vacío o no tiene líneas válidas.")
+                return
+
+            # Crear DataFrame
+            df_out = pd.DataFrame(rows)
+            
+            # Asignar valores fijos para TODO el archivo
+            df_out["Estado"] = ESTADO
+            df_out["Codigo de Rechazo"] = "R020"
+            df_out["Descripcion de Rechazo"] = CODE_DESC["R020"]
+            
+            # Ordenar columnas
+            df_out = df_out[OUT_COLS]
+
+            # Mostrar métricas
+            cnt, total = _count_and_sum(df_out)
+            st.metric("Total a Rechazar (Todo el archivo)", cnt)
+            st.metric("Monto Total", f"{total:,.2f}")
+
+            # Mostrar tabla
+            st.dataframe(df_out)
+
+            # Botones de descarga y envío
+            eb = df_to_excel_bytes(df_out)
+            
+            col1, col2 = st.columns(2)
+            with col1:
+                st.download_button(
+                    "Descargar excel de rechazos",
+                    eb,
+                    file_name="rechazo_total_inoperativo.xlsx",
+                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    use_container_width=True
+                )
+            with col2:
+                _validate_and_post(df_out, "post_total_txt")
 # -------------- Render pestañas --------------
 tabs = st.tabs([
     "PRE BCP-txt",
@@ -655,6 +726,7 @@ tabs = st.tabs([
     "rechazo IBK",
     "POST BCP-xlsx",
     "Procesador SCO",
+    "Rechazo TOTAL",
 ])
 
 with tabs[0]:
@@ -667,3 +739,5 @@ with tabs[3]:
     tab_post_bcp_xlsx()
 with tabs[4]:          
     tab_sco_processor()
+with tabs[5]:
+    tab_rechazo_total_txt()
