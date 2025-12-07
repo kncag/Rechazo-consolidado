@@ -662,6 +662,10 @@ def tab_rechazo_total_txt():
             content = txt_file.read().decode("utf-8", errors="ignore")
             lines = content.splitlines()
             
+            # --- MODIFICACIÓN: Saltar la primera línea (Encabezado) ---
+            if len(lines) > 0:
+                lines = lines[1:]
+
             rows = []
             i = 0
             while i < len(lines):
@@ -669,11 +673,10 @@ def tab_rechazo_total_txt():
                 
                 # --- LÓGICA DE DETECCIÓN ---
                 # Verificamos si en la posición del DNI (25-32) hay números.
-                # En Python los índices empiezan en 0, así que posición 25 es índice 24.
-                # Slice: [24:32] toma los caracteres del 25 al 32.
+                # Índices en Python: 24 al 32
                 dni_candidate = line1[24:32].strip()
                 
-                # Si parece un DNI válido y NO estamos en la última línea (para poder leer la linea 2)
+                # Si parece un DNI válido y hay una línea siguiente para el importe
                 if len(dni_candidate) >= 6 and dni_candidate.isdigit() and (i + 1) < len(lines):
                     
                     # Capturamos la Línea 2 (la siguiente)
@@ -681,14 +684,13 @@ def tab_rechazo_total_txt():
                     
                     # --- EXTRACCIÓN LINEA 1 ---
                     dni = dni_candidate
-                    # Nombre del 40 al 80 (índice 39 a 80)
+                    # Nombre del 40 al 80 (índices 39:80)
                     nombre = line1[39:80].strip()
-                    # Referencia: Usamos la posición estándar del BCP (115 a 126 -> idx 114:126)
-                    # Si tu referencia está en otro lado, ajusta estos números:
+                    # Referencia: 115-126 (índices 114:126)
                     ref = line1[114:126].strip()
                     
                     # --- EXTRACCIÓN LINEA 2 ---
-                    # Importe del 26 al 34 (índice 25 a 34)
+                    # Importe del 26 al 34 (índices 25:34)
                     imp_str = line2[25:34].strip()
                     imp = parse_amount(imp_str)
                     
@@ -699,14 +701,14 @@ def tab_rechazo_total_txt():
                         "Referencia": ref,
                     })
                     
-                    # ¡IMPORTANTE! Saltamos 2 líneas porque ya procesamos el par
+                    # ¡IMPORTANTE! Saltamos 2 líneas (la 1 y la 2 del cliente actual)
                     i += 2
                 else:
-                    # Si no es un registro de cliente (es encabezado o basura), avanzamos solo 1 línea
+                    # Si la línea no tiene DNI (es basura o separador), avanzamos solo 1
                     i += 1
 
             if not rows:
-                st.error("No se detectaron registros válidos. Verifique las posiciones del TXT.")
+                st.error("No se detectaron registros válidos. Verifique que el archivo no esté vacío.")
                 return
 
             # Crear DataFrame
