@@ -657,33 +657,56 @@ def tab_rechazo_total_txt():
     txt_file = st.file_uploader("Cargar TXT Masivo para rechazar totalmente", type="txt", key="total_txt")
     
     if txt_file:
-        with st.spinner("Procesando rechazo total..."):
+        with st.spinner("Procesando rechazo total (Formato 2 líneas)..."):
             # Leer el archivo
             content = txt_file.read().decode("utf-8", errors="ignore")
             lines = content.splitlines()
             
             rows = []
-            for ln in lines:
-                # Saltamos líneas vacías
-                if not ln.strip():
-                    continue
+            i = 0
+            while i < len(lines):
+                line1 = lines[i]
                 
-                # Usamos las posiciones estándar (TXT_POS) para extraer la info
-                # Asegúrate de que TXT_POS esté definido arriba como en tus otros tabs
-                dni = slice_fixed(ln, *TXT_POS["dni"])
-                nombre = slice_fixed(ln, *TXT_POS["nombre"])
-                ref = slice_fixed(ln, *TXT_POS["referencia"])
-                imp = parse_amount(slice_fixed(ln, *TXT_POS["importe"]))
+                # --- LÓGICA DE DETECCIÓN ---
+                # Verificamos si en la posición del DNI (25-32) hay números.
+                # En Python los índices empiezan en 0, así que posición 25 es índice 24.
+                # Slice: [24:32] toma los caracteres del 25 al 32.
+                dni_candidate = line1[24:32].strip()
                 
-                rows.append({
-                    "dni/cex": dni,
-                    "nombre": nombre,
-                    "importe": imp,
-                    "Referencia": ref,
-                })
+                # Si parece un DNI válido y NO estamos en la última línea (para poder leer la linea 2)
+                if len(dni_candidate) >= 6 and dni_candidate.isdigit() and (i + 1) < len(lines):
+                    
+                    # Capturamos la Línea 2 (la siguiente)
+                    line2 = lines[i + 1]
+                    
+                    # --- EXTRACCIÓN LINEA 1 ---
+                    dni = dni_candidate
+                    # Nombre del 40 al 80 (índice 39 a 80)
+                    nombre = line1[39:80].strip()
+                    # Referencia: Usamos la posición estándar del BCP (115 a 126 -> idx 114:126)
+                    # Si tu referencia está en otro lado, ajusta estos números:
+                    ref = line1[114:126].strip()
+                    
+                    # --- EXTRACCIÓN LINEA 2 ---
+                    # Importe del 26 al 34 (índice 25 a 34)
+                    imp_str = line2[25:34].strip()
+                    imp = parse_amount(imp_str)
+                    
+                    rows.append({
+                        "dni/cex": dni,
+                        "nombre": nombre,
+                        "importe": imp,
+                        "Referencia": ref,
+                    })
+                    
+                    # ¡IMPORTANTE! Saltamos 2 líneas porque ya procesamos el par
+                    i += 2
+                else:
+                    # Si no es un registro de cliente (es encabezado o basura), avanzamos solo 1 línea
+                    i += 1
 
             if not rows:
-                st.error("El archivo TXT parece estar vacío o no tiene líneas válidas.")
+                st.error("No se detectaron registros válidos. Verifique las posiciones del TXT.")
                 return
 
             # Crear DataFrame
@@ -699,7 +722,7 @@ def tab_rechazo_total_txt():
 
             # Mostrar métricas
             cnt, total = _count_and_sum(df_out)
-            st.metric("Total a Rechazar (Todo el archivo)", cnt)
+            st.metric("Total a Rechazar", cnt)
             st.metric("Monto Total", f"{total:,.2f}")
 
             # Mostrar tabla
