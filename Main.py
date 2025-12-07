@@ -479,325 +479,175 @@ def tab_post_bcp_xlsx():
             _validate_and_post(df_final, "post_post_xlsx")
             
 def tab_sco_processor():
-    st.header("Procesador Scotiabank (PDF + TXT + XLS)")
-    st.info("Este tab cruza 3 archivos para identificar rechazos y permite la edición final.")
+    st.header("Procesador Scotiabank (Redefinido)")
+    st.info("Módulo simplificado: Auditoría de cantidades y Procesamiento de errores por Excel.")
 
     # 1. Carga de archivos
-    pdf_file = st.file_uploader("PDF Detalle de orden", type="pdf", key="sco_pdf")
-    txt_file = st.file_uploader("TXT Masivo", type="txt", key="sco_txt")
-    xls_file = st.file_uploader("XLS Errores encontrados (Opcional)", type=["xls", "xlsx", "csv"], key="sco_xls")
+    col_up1, col_up2, col_up3 = st.columns(3)
+    with col_up1:
+        pdf_file = st.file_uploader("1. PDF Detalle (Para Auditoría)", type="pdf", key="sco_pdf")
+    with col_up2:
+        txt_file = st.file_uploader("2. TXT Masivo (Base de datos)", type="txt", key="sco_txt")
+    with col_up3:
+        xls_file = st.file_uploader("3. XLS Errores (Para Rechazos)", type=["xls", "xlsx", "csv"], key="sco_xls")
 
-    # --- TOGGLE DE DEBUG RECUPERADO ---
-    show_debug = st.toggle("🛠️ Mostrar log de lectura del PDF (Debug)", value=False) 
-
-    if not (pdf_file and txt_file):
-        st.caption("Por favor, cargue al menos los archivos PDF y TXT.")
-        return
-
-    with st.spinner("Procesando archivos de Scotiabank..."):
+    # Variables compartidas
+    txt_lines = []
+    
+    # ---------------------------------------------------------
+    # SECCIÓN 1: AUDITORÍA (PDF vs TXT)
+    # ---------------------------------------------------------
+    if pdf_file and txt_file:
+        st.divider()
+        st.subheader("📊 Sección 1: Auditoría de Cantidades")
         
-        # --- Tareas de Extracción y Resumen (Usando fitz) ---
+        # A. Procesar TXT
+        txt_content = txt_file.read().decode("utf-8", errors="ignore")
+        # Filtramos líneas vacías para tener el conteo real de registros
+        txt_lines = [line for line in txt_content.splitlines() if line.strip()]
+        count_txt = len(txt_lines)
+
+        # B. Procesar PDF (Contar "O.K.")
         pdf_bytes = pdf_file.read()
-        try:
-            pdf_text_fitz = "".join(p.get_text() or "" for p in fitz.open(stream=io.BytesIO(pdf_bytes), filetype="pdf"))
-        except Exception as e:
-            st.error(f"Error al leer el texto del PDF con fitz: {e}")
-            return
-
-        st.subheader("Resumen de la Orden (PDF)")
-        col1, col2 = st.columns(2)
+        pdf_text = ""
+        with fitz.open(stream=io.BytesIO(pdf_bytes), filetype="pdf") as doc:
+            for page in doc:
+                pdf_text += page.get_text()
         
-        # Variables para validación cruzada final
-        header_total_val = 0.0
-        header_qty_val = 0
+        # Normalización de caracteres griegos (Omicron/Kappa) a Latinos
+        pdf_text_norm = pdf_text.upper().replace("Ο", "O").replace("Κ", "K")
         
-        with col1:
-            orden_match = re.search(r"Detalle de orden No\.\s+(\d+)", pdf_text_fitz)
-            orden_fija = f"9242{orden_match.group(1)}" if orden_match else "No encontrado"
-            st.text_input("Nro. Orden (Formato Fijo)", orden_fija, key="sco_orden")
+        # Contamos cuántas veces aparece "O.K."
+        count_ok_pdf = pdf_text_norm.count("O.K.")
+
+        # C. Mostrar Comparación
+        c1, c2, c3 = st.columns(3)
+        c1.metric("Registros en TXT", count_txt)
+        c2.metric("Confirmaciones 'O.K.' en PDF", count_ok_pdf)
         
-        with col2:
-            cantidad_match = re.search(r"Total de la orden\s+([\d,\.]+)", pdf_text_fitz)
-            cantidad_str = cantidad_match.group(1) if cantidad_match else "No encontrado"
-            if cantidad_match:
-                try:
-                    header_qty_val = int(cantidad_match.group(1).replace(",", "").replace(".", "")) 
-                except: pass
+        diff = count_txt - count_ok_pdf
+        c3.metric("Diferencia", diff, delta_color="inverse")
 
-            monto_match = re.search(r"Total de la orden\s+[\d,\.]+\s+([\d,\.]+)", pdf_text_fitz)
-            if monto_match:
-                monto_str = f"S/ {monto_match.group(1)}"
-                header_total_val = parse_amount(monto_match.group(1)) 
-            else:
-                monto_str = "No encontrado"
+        if diff == 0:
+            st.success("✅ ¡Cuadratura Perfecta! Todos los registros del TXT tienen su 'O.K.' en el PDF.")
+        elif diff > 0:
+            st.warning(f"⚠️ Hay {diff} registros en el TXT que NO tienen 'O.K.' en el PDF (Posibles rechazos).")
+        else:
+            st.error(f"🚨 Extraño: Hay más 'O.K.' en el PDF que líneas en el TXT. Revise los archivos.")
 
-            if monto_str == "No encontrado" and cantidad_str != "No encontrado":
-                monto_str = f"S/ {cantidad_str}"
-                header_total_val = parse_amount(cantidad_str)
-                cantidad_str = "N/A"
-                header_qty_val = 0 # No pudimos determinar cantidad confiablemente
-
-            st.text_input("Cantidad de Ordenes", cantidad_str, key="sco_cantidad")
-            st.text_input("Monto Total de Orden", monto_str, key="sco_total")
-
-        # --- Preparación de datos TXT ---
-        txt_lines = txt_file.read().decode("utf-8", errors="ignore").splitlines()
-        
-        dni_map = {
-            slice_fixed(line, *SCO_TXT_POS["dni"]): line 
-            for line in txt_lines if line.strip()
-        }
-        line_num_map = {
-            i + 1: line 
-            for i, line in enumerate(txt_lines) if line.strip()
-        }
+    # ---------------------------------------------------------
+    # SECCIÓN 2: GENERACIÓN DE RECHAZOS (Desde XLS)
+    # ---------------------------------------------------------
+    if xls_file and txt_lines:
+        st.divider()
+        st.subheader("🚫 Sección 2: Generar Rechazos desde XLS")
         
         rows_to_reject = []
-        dnis_not_in_txt = set()
-        debug_log = []
-        footer_total_found = None 
-        
-        # --- CONTADORES ---
-        count_detected = 0
-        count_ok = 0
-        count_error = 0
-
-        # --- Fuente A: Errores desde el PDF (Usando pdfplumber) ---
         try:
-            pdf_file.seek(0)
+            # Leemos el XLS asumiendo que la cabecera está en la fila 7 (index 6)
+            df_xls = pd.read_excel(xls_file, header=6, dtype=str)
             
-            # --- CONFIGURACIÓN CORREGIDA Y VÁLIDA ---
-            # 'snap_tolerance' es válido para tablas. Quitamos x/y tolerance y keep_blank_chars.
-            settings = {
-                "vertical_strategy": "text", 
-                "horizontal_strategy": "text",
-                "snap_tolerance": 3,
-            }
-
-            with pdfplumber.open(pdf_file) as pdf:
-                for i, page in enumerate(pdf.pages):
+            # Verificamos que tenga las columnas esperadas
+            if "Linea" not in df_xls.columns:
+                st.error("El Excel no tiene la columna 'Linea'. Verifique el formato (header=6).")
+            else:
+                for _, row in df_xls.iterrows():
+                    linea_val = row.get("Linea")
+                    obs_val = row.get("Observación:")
                     
-                    tables = page.extract_tables(table_settings=settings)
-                    
-                    if not tables:
-                        if show_debug: debug_log.append(f"[Página {i+1}] No se encontraron tablas.")
+                    # Validar que sea un número de línea válido
+                    if pd.isna(linea_val): 
                         continue
                     
-                    if show_debug: debug_log.append(f"--- [Página {i+1}] Tablas detectadas: {len(tables)} ---")
+                    try:
+                        # El excel trae "129.0", lo convertimos a entero 129
+                        line_idx = int(float(linea_val))
+                    except ValueError:
+                        continue
 
-                    for t_idx, table in enumerate(tables):
-                        for row in table:
-                            if not row: continue
-                            
-                            # Limpieza de la fila
-                            clean_row = [str(cell or "").strip().replace("\n", " ") for cell in row]
-                            
-                            if all(cell == "" for cell in clean_row):
-                                continue
-
-                            # Búsqueda del DNI en la fila
-                            dni = ""
-                            dni_col_idx = -1
-                            
-                            for idx, cell in enumerate(clean_row):
-                                # Validaciones estrictas:
-                                # 1. Dígitos, 2. Largo válido, 3. No comas (montos), 4. No guiones (basura)
-                                if (len(cell) >= 6 and 
-                                    any(c.isdigit() for c in cell) and 
-                                    len(cell) < 15 and 
-                                    "," not in cell and 
-                                    not cell.startswith("-") and
-                                    "VALORA" not in cell):
-
-                                    if "/" not in cell: 
-                                        dni = cell
-                                        dni_col_idx = idx
-                                        break
-                                
-                                # Captura de total footer (Si parece monto > 1000)
-                                if "," in cell and "." in cell and any(c.isdigit() for c in cell):
-                                    try:
-                                        val = parse_amount(cell)
-                                        if val > 1000: 
-                                            footer_total_found = val
-                                            if show_debug: debug_log.append(f"💰 Posible Total encontrado en pie: {cell}")
-                                    except:
-                                        pass
-
-                            if not dni:
-                                if show_debug: debug_log.append(f"SKIP (No DNI): {clean_row}")
-                                continue
-
-                            # Filtro de Cabeceras
-                            if "Documento" in dni or "Beneficiario" in dni:
-                                if show_debug: debug_log.append(f"SKIP (Cabecera): {clean_row}")
-                                continue
-
-                            # --- REGISTRO VÁLIDO ---
-                            count_detected += 1
-
-                            # Búsqueda del Estado
-                            estado_raw = ""
-                            fila_texto_completa = " ".join(clean_row).upper()
-                            fila_texto_norm = fila_texto_completa.replace("Ο", "O").replace("Κ", "K")
-
-                            # --- LÓGICA DE DECISIÓN ---
-                            
-                            if "O.K." in fila_texto_norm:
-                                count_ok += 1
-                                if show_debug: debug_log.append(f"OK (Ignorado): DNI={dni}")
-                                continue
-                            
-                            # Si no es OK, es error
-                            count_error += 1
-                            code, desc = "R002", "CUENTA INVALIDA"
-                            tipo_error = "GENÉRICO"
-                            es_error = False
-                            
-                            if "CTA ES CTS" in fila_texto_norm:
-                                code, desc = "R017", "CUENTA DE AFP / CTS"
-                                tipo_error = "CTS"
-                                es_error = True
-                            elif "O.K." not in fila_texto_norm:
-                                es_error = True
-                            
-                            if es_error:
-                                try:
-                                    estado_raw = next(s for s in reversed(clean_row) if s)
-                                except StopIteration:
-                                    estado_raw = "Desconocido"
-
-                                if show_debug: 
-                                    debug_log.append(f"🔴 ERROR DETECTADO ({tipo_error}): DNI={dni} | Estado='{estado_raw}'")
-
-                                # Cruce con TXT
-                                if dni in dni_map:
-                                    txt_line = dni_map[dni]
-                                    rows_to_reject.append({
-                                        "dni/cex": dni,
-                                        "nombre": slice_fixed(txt_line, *SCO_TXT_POS["nombre"]),
-                                        "importe": parse_sco_importe(slice_fixed(txt_line, *SCO_TXT_POS["importe"])),
-                                        "Referencia": slice_fixed(txt_line, *SCO_TXT_POS["referencia"]),
-                                        "Codigo de Rechazo": code,
-                                        "Fuente": "PDF"
-                                    })
-                                else:
-                                    dnis_not_in_txt.add(dni)
-                                    if show_debug: debug_log.append(f"⚠️ ADVERTENCIA: DNI {dni} no está en TXT.")
-        
-        except Exception as e:
-            st.error(f"Error fatal al procesar el PDF: {e}")
-            return
-
-        # --- MOSTRAR MÉTRICAS Y VALIDACIONES ---
-        st.divider()
-        st.subheader("📊 Estadísticas de Lectura")
-        
-        m1, m2, m3, m4 = st.columns(4)
-        m1.metric("Total Registros PDF", count_detected)
-        m2.metric("Pagos Exitosos (OK)", count_ok)
-        m3.metric("Rechazos Detectados", count_error)
-        
-        if header_qty_val > 0:
-            delta = count_detected - header_qty_val
-            m4.metric("Vs. Encabezado", f"{header_qty_val}", delta=delta, delta_color="inverse")
-            if delta == 0:
-                st.success(f"✅ Cuadratura Perfecta: {count_detected} registros leídos.")
-            else:
-                st.warning(f"⚠️ Atención: Diferencia de {delta} registros con el encabezado.")
-        else:
-            m4.metric("Vs. Encabezado", "N/A")
-
-        st.divider()
-
-        # --- MOSTRAR LOG (SI TOGGLE ACTIVADO) ---
-        if show_debug:
-            st.subheader("🛠️ Log de Lectura del PDF")
-            st.text_area("Detalle de lectura:", value="\n".join(debug_log), height=300)
-            st.divider()
-
-        # --- VALIDACIÓN DE TOTALES (Footer vs Header) ---
-        if footer_total_found and header_total_val > 0:
-            diff = abs(footer_total_found - header_total_val)
-            if diff < 1.0: 
-                st.success(f"✅ Validación de Montos Exitosa: El total en el pie ({footer_total_found:,.2f}) coincide con el encabezado.")
-            else:
-                st.info(f"ℹ️ Nota: Total en pie ({footer_total_found:,.2f}) vs Encabezado ({header_total_val:,.2f})")
-
-        # --- Advertencias ---
-        if dnis_not_in_txt:
-            st.warning("⚠️ **Advertencia:** Se encontraron DNIs con error en el PDF que no existen en el TXT.")
-            with st.expander("Ver lista de DNIs faltantes"):
-                st.write(sorted(list(dnis_not_in_txt)))
-
-        # --- Fuente B: XLS (Opcional) ---
-        if xls_file:
-            try:
-                df_xls = pd.read_excel(xls_file, header=6, dtype=str)
-                for _, row in df_xls.iterrows():
-                    line_num_str = row.iloc[0]
-                    if pd.isna(line_num_str): continue
-                    try: line_num = int(float(line_num_str))
-                    except ValueError: continue 
-
-                    observation = row.iloc[3]
-                    if line_num in line_num_map:
-                        txt_line = line_num_map[line_num]
-                        code, desc = map_sco_xls_error_to_code(observation)
+                    # Validar que la línea exista en el TXT (TXT es base 0, Excel suele ser base 1)
+                    # PERO: En tu lógica anterior, usabas el número directo. 
+                    # Asumimos que "Linea 1" del Excel corresponde al primer registro del TXT.
+                    
+                    # Ajuste de índice: Si Excel dice 1, es index 0 del array
+                    idx_array = line_idx - 1
+                    
+                    if 0 <= idx_array < len(txt_lines):
+                        raw_line = txt_lines[idx_array]
                         
+                        # Extraemos datos del TXT usando tus posiciones fijas
+                        dni = slice_fixed(raw_line, *SCO_TXT_POS["dni"])
+                        nombre = slice_fixed(raw_line, *SCO_TXT_POS["nombre"])
+                        importe = parse_sco_importe(slice_fixed(raw_line, *SCO_TXT_POS["importe"]))
+                        # Referencia especial para SCO (116-127)
+                        referencia = slice_fixed(raw_line, 116, 127) 
+                        
+                        # Mapeamos el código de error
+                        code, desc = map_sco_xls_error_to_code(obs_val)
+
                         rows_to_reject.append({
-                            "dni/cex": slice_fixed(txt_line, *SCO_TXT_POS["dni"]),
-                            "nombre": slice_fixed(txt_line, *SCO_TXT_POS["nombre"]),
-                            "importe": parse_sco_importe(slice_fixed(txt_line, *SCO_TXT_POS["importe"])),
-                            "Referencia": slice_fixed(txt_line, 116, 127),
+                            "dni/cex": dni,
+                            "nombre": nombre,
+                            "importe": importe,
+                            "Referencia": referencia,
                             "Codigo de Rechazo": code,
-                            "Fuente": "XLS"
+                            "Descripcion de Rechazo": desc # Pre-asignamos para mostrar
                         })
-            except Exception as e:
-                st.warning(f"No se pudo leer el archivo XLS (opcional): {e}")
 
-        # --- Resultado Final ---
-        if not rows_to_reject:
-            st.success("Proceso completado. No se encontraron registros para rechazar.")
-            return
+        except Exception as e:
+            st.error(f"Error al leer el archivo XLS: {e}")
+            st.write("Asegúrese de instalar 'xlrd' si es un archivo .xls antiguo.")
 
-        df_out = pd.DataFrame(rows_to_reject)
-        df_out = df_out.drop_duplicates(subset=["dni/cex"], keep="last")
-        
-        st.subheader("Registros a Rechazar (Editables)")
-        
-        valid_codes = list(CODE_DESC.keys())
-        
-        edited_df = st.data_editor(
-            df_out,
-            column_config={
-                "Codigo de Rechazo": st.column_config.SelectboxColumn("Código de Rechazo", options=valid_codes, required=True),
-                "Fuente": st.column_config.TextColumn("Fuente", disabled=True),
-                "dni/cex": st.column_config.TextColumn("DNI/CEX", disabled=True),
-                "nombre": st.column_config.TextColumn("Nombre", disabled=True),
-                "importe": st.column_config.NumberColumn("Importe", format="%.2f", disabled=True),
-                "Referencia": st.column_config.TextColumn("Referencia", disabled=True),
-            },
-            use_container_width=True,
-            num_rows="dynamic",
-            key="editor_sco"
-        )
-        
-        df_final = edited_df.copy()
-        df_final["Estado"] = ESTADO
-        df_final["Descripcion de Rechazo"] = df_final["Codigo de Rechazo"].map(CODE_DESC)
-        df_final = df_final[OUT_COLS]
+        # Mostrar tabla si hay rechazos
+        if rows_to_reject:
+            df_out = pd.DataFrame(rows_to_reject)
+            
+            # Preparamos dataframe editable
+            valid_codes = list(CODE_DESC.keys())
+            
+            edited_df = st.data_editor(
+                df_out,
+                column_config={
+                    "Codigo de Rechazo": st.column_config.SelectboxColumn(
+                        "Código de Rechazo", options=valid_codes, required=True
+                    ),
+                    "Descripcion de Rechazo": st.column_config.TextColumn("Descripción (Auto)", disabled=True),
+                    "dni/cex": st.column_config.TextColumn("DNI/CEX", disabled=True),
+                    "nombre": st.column_config.TextColumn("Nombre", disabled=True),
+                    "importe": st.column_config.NumberColumn("Importe", format="%.2f", disabled=True),
+                    "Referencia": st.column_config.TextColumn("Referencia", disabled=True),
+                },
+                use_container_width=True,
+                num_rows="dynamic",
+                key="editor_sco_simple"
+            )
+            
+            # Preparar salida final
+            df_final = edited_df.copy()
+            df_final["Estado"] = ESTADO
+            # Actualizar descripción por si el usuario cambió el código
+            df_final["Descripcion de Rechazo"] = df_final["Codigo de Rechazo"].map(CODE_DESC)
+            df_final = df_final[OUT_COLS] # Ordenar columnas
 
-        cnt, total = _count_and_sum(df_final)
-        st.write(f"**Total transacciones a rechazar:** {cnt}  |  **Suma de importes:** {total:,.2f}")
+            # Métricas finales
+            cnt, total = _count_and_sum(df_final)
+            st.write(f"**Total a rechazar:** {cnt} | **Monto Total:** {total:,.2f}")
 
-        eb = df_to_excel_bytes(df_final)
+            # Botones de Acción
+            col_b1, col_b2 = st.columns(2)
+            with col_b1:
+                eb = df_to_excel_bytes(df_final)
+                st.download_button("Descargar Excel", eb, "rechazos_sco.xlsx", 
+                                 "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", 
+                                 use_container_width=True)
+            with col_b2:
+                _validate_and_post(df_final, "post_sco_simple")
         
-        col1, col2 = st.columns(2)
-        with col2:
-            st.download_button("Descargar excel de rechazos", eb, file_name="rechazos_sco.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", use_container_width=True)
-        with col1:
-            _validate_and_post(df_final, "post_sco")
+        elif xls_file:
+            st.info("El archivo XLS se leyó, pero no contenía líneas válidas para rechazar.")
+
+    elif not pdf_file and not txt_file:
+        st.info("👆 Carga los archivos arriba para comenzar.")
 # -------------- Render pestañas --------------
 tabs = st.tabs([
     "PRE BCP-txt",
