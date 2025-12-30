@@ -34,7 +34,7 @@ CODE_DESC = {
     "R002": "CUENTA INVALIDA",
     "R007": "RECHAZO POR CCI",
     "R017": "CUENTA DE AFP / CTS",
-    "R020": "BANCO INOPERATIVO",
+    "R020": "CUENTA BANCARIA INOPERATIVA",
 }
 # NUEVA CONSTANTE para el layout del TXT de Scotiabank
 SCO_TXT_POS = {
