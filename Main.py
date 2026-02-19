@@ -744,7 +744,7 @@ def tab_rechazo_total_txt():
                 )
             with col2:
                 _validate_and_post(df_out, "post_total_txt")
-    def tab_bcp_prueba():
+def tab_bcp_prueba():
     st.header("BCP Prueba")
     st.info("Módulo para procesar rechazos desde Excel BCP basado en la columna 'Observación'.")
     
