@@ -744,74 +744,6 @@ def tab_rechazo_total_txt():
                 )
             with col2:
                 _validate_and_post(df_out, "post_total_txt")
-def tab_bcp_prueba():
-    st.header("BCP Prueba")
-    st.info("Módulo para procesar rechazos desde Excel BCP basado en la columna 'Observación'.")
-    
-    ex_file = st.file_uploader("Cargar Excel BCP (.xlsx)", type=["xlsx", "xls", "csv"], key="bcp_prueba_file")
-    
-    if ex_file:
-        with st.spinner("Procesando BCP prueba…"):
-            # Permite probar también con CSV si es necesario basado en el ejemplo subido
-            if ex_file.name.endswith(".csv"):
-                df_raw = pd.read_csv(ex_file, dtype=str)
-            else:
-                df_raw = pd.read_excel(ex_file, dtype=str)
-            
-            if "Observación" not in df_raw.columns:
-                st.error("No se encontró la columna 'Observación' en el archivo.")
-                return
-            
-            # Filtrar donde Observación no sea nula y sea diferente de "Ninguna"
-            mask = df_raw["Observación"].notna() & (df_raw["Observación"].str.strip().str.lower() != "ninguna")
-            df_valid = df_raw.loc[mask].reset_index(drop=True)
-            
-            if df_valid.empty:
-                st.warning("No se encontraron registros con observaciones diferentes a 'Ninguna'.")
-                return
-            
-            # Identificar columnas. Pandas renombra columnas duplicadas añadiendo .1, .2, etc.
-            # "Documento" suele ser el DNI, "Documento.1" suele ser el PSPTIN (que inicia con 000).
-            col_dni = "Documento" if "Documento" in df_valid.columns else df_valid.columns[3]
-            col_ref = "Documento.1" if "Documento.1" in df_valid.columns else df_valid.columns[5]
-            col_nombre = "Beneficiario - Nombre" if "Beneficiario - Nombre" in df_valid.columns else df_valid.columns[1]
-            col_importe = "Monto" if "Monto" in df_valid.columns else df_valid.columns[7]
-
-            df_out = pd.DataFrame({
-                "dni/cex": df_valid[col_dni],
-                "nombre": df_valid[col_nombre],
-                "importe": df_valid[col_importe].apply(parse_amount),
-                "Referencia": df_valid[col_ref],
-            })
-            
-            df_out["Estado"] = ESTADO
-            
-            # Lógica idéntica a la pestaña IBK para asignar el Código de Rechazo basado en la Observación
-            df_out["Codigo de Rechazo"] = [
-                "R016" if any(k in str(o).lower() for k in KEYWORDS_NO_TIT) else "R002"
-                for o in df_valid["Observación"]
-            ]
-            df_out["Descripcion de Rechazo"] = [
-                "CLIENTE NO TITULAR DE LA CUENTA" if any(k in str(o).lower() for k in KEYWORDS_NO_TIT) else "CUENTA INVALIDA"
-                for o in df_valid["Observación"]
-            ]
-            
-            df_out = df_out[OUT_COLS]
-
-            cnt, total = _count_and_sum(df_out)
-            st.write(f"**Total transacciones:** {cnt}   |   **Suma de importes:** {total:,.2f}")
-
-            st.dataframe(df_out)
-
-            eb = df_to_excel_bytes(df_out)
-            st.download_button(
-                "Descargar excel de registros",
-                eb,
-                file_name="rechazo_bcp_prueba.xlsx",
-                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-            )
-
-            _validate_and_post(df_out, "post_bcp_prueba")
 # -------------- Render pestañas --------------
 tabs = st.tabs([
     "PRE BCP-txt",
@@ -820,7 +752,6 @@ tabs = st.tabs([
     "POST BCP-xlsx",
     "Procesador SCO",
     "Rechazo TOTAL",
-    "post_bcp_prueba,"
 ])
 
 with tabs[0]:
@@ -834,6 +765,4 @@ with tabs[3]:
 with tabs[4]:          
     tab_sco_processor()
 with tabs[5]:
-    tab_rechazo_total_txt()
-with tabs[6]:
     tab_rechazo_total_txt()
