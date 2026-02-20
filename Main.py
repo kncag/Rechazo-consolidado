@@ -623,12 +623,12 @@ def tab_bcp_prueba():
                 st.warning("No se encontraron registros con observaciones diferentes a 'Ninguna'.")
                 return
             
-            # Extraer columnas usando los índices basados en los encabezados reales indicados:
-            # 0: Beneficiario - Nombre, 2: Documento (DNI), 4: Documento.1 (Referencia), 6: Monto (Importe)
-            nombre_out = df_valid.iloc[:, 0] if df_valid.shape[1] > 0 else pd.Series([""] * len(df_valid))
-            dni_out = df_valid.iloc[:, 2] if df_valid.shape[1] > 2 else pd.Series([""] * len(df_valid))
-            ref_out = df_valid.iloc[:, 4] if df_valid.shape[1] > 4 else pd.Series([""] * len(df_valid))
-            importe_out = df_valid.iloc[:, 6].apply(parse_amount) if df_valid.shape[1] > 6 else pd.Series([0.0] * len(df_valid))
+            # Extraer columnas usando los nombres de los encabezados indicados:
+            nombre_out = df_valid["Beneficiario - Nombre"] if "Beneficiario - Nombre" in df_valid.columns else pd.Series([""] * len(df_valid))
+            ref_out = df_valid["Documento"] if "Documento" in df_valid.columns else pd.Series([""] * len(df_valid))
+            # Asignamos el DNI al segundo Documento.1 si existe, de lo contrario lo dejamos en blanco
+            dni_out = df_valid["Documento.1"] if "Documento.1" in df_valid.columns else pd.Series([""] * len(df_valid))
+            importe_out = df_valid["Monto"].apply(parse_amount) if "Monto" in df_valid.columns else pd.Series([0.0] * len(df_valid))
 
             df_out = pd.DataFrame({
                 "dni/cex": dni_out,
