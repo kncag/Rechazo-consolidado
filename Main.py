@@ -144,21 +144,27 @@ def render_final_output(df: pd.DataFrame, file_name: str, post_key: str, editor_
     Función DRY que centraliza el cálculo de totales, dibujo de la tabla editable
     y la creación de los botones de Excel y POST.
     """
-    valid_codes = list(CODE_DESC.keys())
     st.subheader("Registros a procesar (Editables)")
-    st.caption("Puedes modificar los datos, cambiar el 'Código de Rechazo' o añadir/eliminar filas usando las casillas de la izquierda.")
+    st.caption("Puedes modificar los datos, cambiar el 'Motivo de Rechazo' o añadir/eliminar filas usando las casillas de la izquierda.")
+
+    # Preparar dataframe para UI combinando Código y Descripción
+    df_ui = df.copy()
+    if "Codigo de Rechazo" in df_ui.columns and "Descripcion de Rechazo" in df_ui.columns:
+        df_ui["Motivo de Rechazo"] = df_ui["Codigo de Rechazo"] + " - " + df_ui["Descripcion de Rechazo"]
+        df_ui = df_ui.drop(columns=["Codigo de Rechazo", "Descripcion de Rechazo"])
+
+    valid_options = [f"{k} - {v}" for k, v in CODE_DESC.items()]
 
     edited_df = st.data_editor(
-        df,
+        df_ui,
         column_config={
-            "Codigo de Rechazo": st.column_config.SelectboxColumn(
-                "Código de Rechazo", options=valid_codes, required=True
+            "Motivo de Rechazo": st.column_config.SelectboxColumn(
+                "Código y Descripción", options=valid_options, required=True
             ),
-            "Descripcion de Rechazo": st.column_config.TextColumn("Descripción (Auto)", disabled=True),
-            "dni/cex": st.column_config.TextColumn("DNI/CEX"), # Ya no está bloqueado
-            "nombre": st.column_config.TextColumn("Nombre"),   # Ya no está bloqueado
-            "importe": st.column_config.NumberColumn("Importe", format="%.2f"), # Ya no está bloqueado
-            "Referencia": st.column_config.TextColumn("Referencia"), # Ya no está bloqueado
+            "dni/cex": st.column_config.TextColumn("DNI/CEX"), 
+            "nombre": st.column_config.TextColumn("Nombre"),   
+            "importe": st.column_config.NumberColumn("Importe", format="%.2f"), 
+            "Referencia": st.column_config.TextColumn("Referencia"), 
             "Estado": st.column_config.TextColumn("Estado", disabled=True),
         },
         use_container_width=True,
@@ -166,10 +172,24 @@ def render_final_output(df: pd.DataFrame, file_name: str, post_key: str, editor_
         key=editor_key
     )
     
-    # Actualizar descripciones por si el usuario cambió el código
+    # Reconstruir las columnas separadas para el endpoint y el Excel
     df_final = edited_df.copy()
-    if "Codigo de Rechazo" in df_final.columns:
-        df_final["Descripcion de Rechazo"] = df_final["Codigo de Rechazo"].map(CODE_DESC)
+    if "Motivo de Rechazo" in df_final.columns:
+        def extract_code(val):
+            if pd.isna(val) or str(val).strip() in ["", "nan", "None"]: return ""
+            return str(val).split(" - ")[0].strip()
+            
+        def extract_desc(val):
+            if pd.isna(val) or str(val).strip() in ["", "nan", "None"]: return ""
+            parts = str(val).split(" - ", 1)
+            return parts[1].strip() if len(parts) > 1 else CODE_DESC.get(parts[0].strip(), "")
+
+        df_final["Codigo de Rechazo"] = df_final["Motivo de Rechazo"].apply(extract_code)
+        df_final["Descripcion de Rechazo"] = df_final["Motivo de Rechazo"].apply(extract_desc)
+        df_final = df_final.drop(columns=["Motivo de Rechazo"])
+        
+    # Asegurar que el orden final sea exactamente el esperado (OUT_COLS)
+    df_final = df_final[[c for c in OUT_COLS if c in df_final.columns]]
     
     cnt, total = _count_and_sum(df_final)
     st.write(f"**Total transacciones:** {cnt}   |   **Suma de importes:** {total:,.2f}")
@@ -623,11 +643,15 @@ def tab_bcp_prueba():
                 st.warning("No se encontraron registros con observaciones diferentes a 'Ninguna'.")
                 return
             
-            # Extraer columnas usando los nombres de los encabezados indicados:
+            # Extraer columnas usando nombres explícitos o índices exactos (D=3, F=5)
             nombre_out = df_valid["Beneficiario - Nombre"] if "Beneficiario - Nombre" in df_valid.columns else pd.Series([""] * len(df_valid))
-            ref_out = df_valid["Documento"] if "Documento" in df_valid.columns else pd.Series([""] * len(df_valid))
-            # Asignamos el DNI a la columna "Documento - Tipo" si existe, de lo contrario lo dejamos en blanco
-            dni_out = df_valid["Documento - Tipo"] if "Documento - Tipo" in df_valid.columns else pd.Series([""] * len(df_valid))
+            
+            # DNI desde la columna D (índice 3)
+            dni_out = df_valid.iloc[:, 3] if df_valid.shape[1] > 3 else pd.Series([""] * len(df_valid))
+            
+            # Referencia desde la columna F (índice 5)
+            ref_out = df_valid.iloc[:, 5] if df_valid.shape[1] > 5 else pd.Series([""] * len(df_valid))
+            
             importe_out = df_valid["Monto"].apply(parse_amount) if "Monto" in df_valid.columns else pd.Series([0.0] * len(df_valid))
 
             df_out = pd.DataFrame({
