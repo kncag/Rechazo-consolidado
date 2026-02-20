@@ -265,7 +265,7 @@ def tab_pre_bcp_txt():
 
 def tab_bcp_prueba():
     st.subheader("POST RECHAZO BCP")
-    st.info("Módulo para procesar rechazos desde Excel BCP basado en la columna 'Observación'.")
+    st.info("Debe descargar el detalle completo de pagos en el detalle de operación del banco BCP .")
     
     code, desc = select_code("bcp_prueba_code", "R001")
     ex_file = st.file_uploader("Cargar Excel BCP (.xlsx o .csv)", type=["xlsx", "xls", "csv"], key="bcp_prueba_file")
