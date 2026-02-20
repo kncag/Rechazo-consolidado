@@ -139,18 +139,42 @@ def _count_and_sum(df: pd.DataFrame) -> tuple[int, float]:
     total = df["importe"].sum() if "importe" in df.columns else 0.0
     return cnt, total
 
-def render_final_output(df: pd.DataFrame, file_name: str, post_key: str, show_df: bool = True):
+def render_final_output(df: pd.DataFrame, file_name: str, post_key: str, editor_key: str, show_df: bool = True):
     """
-    Función DRY que centraliza el cálculo de totales, dibujo de la tabla (opcional)
-    y la creación de los botones de Excel y POST en un formato estandarizado de 2 columnas.
+    Función DRY que centraliza el cálculo de totales, dibujo de la tabla editable
+    y la creación de los botones de Excel y POST.
     """
-    cnt, total = _count_and_sum(df)
-    st.write(f"**Total transacciones:** {cnt}   |   **Suma de importes:** {total:,.2f}")
+    valid_codes = list(CODE_DESC.keys())
+    st.subheader("Registros a procesar (Editables)")
+    st.caption("Puedes modificar los datos, cambiar el 'Código de Rechazo' o añadir/eliminar filas usando las casillas de la izquierda.")
+
+    edited_df = st.data_editor(
+        df,
+        column_config={
+            "Codigo de Rechazo": st.column_config.SelectboxColumn(
+                "Código de Rechazo", options=valid_codes, required=True
+            ),
+            "Descripcion de Rechazo": st.column_config.TextColumn("Descripción (Auto)", disabled=True),
+            "dni/cex": st.column_config.TextColumn("DNI/CEX"), # Ya no está bloqueado
+            "nombre": st.column_config.TextColumn("Nombre"),   # Ya no está bloqueado
+            "importe": st.column_config.NumberColumn("Importe", format="%.2f"), # Ya no está bloqueado
+            "Referencia": st.column_config.TextColumn("Referencia"), # Ya no está bloqueado
+            "Estado": st.column_config.TextColumn("Estado", disabled=True),
+        },
+        use_container_width=True,
+        num_rows="dynamic",
+        key=editor_key
+    )
     
-    if show_df:
-        st.dataframe(df)
+    # Actualizar descripciones por si el usuario cambió el código
+    df_final = edited_df.copy()
+    if "Codigo de Rechazo" in df_final.columns:
+        df_final["Descripcion de Rechazo"] = df_final["Codigo de Rechazo"].map(CODE_DESC)
+    
+    cnt, total = _count_and_sum(df_final)
+    st.write(f"**Total transacciones:** {cnt}   |   **Suma de importes:** {total:,.2f}")
         
-    eb = df_to_excel_bytes(df)
+    eb = df_to_excel_bytes(df_final)
     
     col1, col2 = st.columns(2)
     with col1:
@@ -162,7 +186,7 @@ def render_final_output(df: pd.DataFrame, file_name: str, post_key: str, show_df
             use_container_width=True
         )
     with col2:
-        _validate_and_post(df, post_key)
+        _validate_and_post(df_final, post_key)
 
 def _find_situacion_column_in_df(df: pd.DataFrame) -> str | None:
     def norm(s: str) -> str:
@@ -284,8 +308,7 @@ def tab_pre_bcp_xlsx():
             df_out["Descripcion de Rechazo"] = desc
             df_out = df_out[OUT_COLS]
 
-            # Reemplazo DRY
-            render_final_output(df_out, "pre_bcp_xlsx.xlsx", "post_pre_xlsx")
+            render_final_output(df_out, "pre_bcp_xlsx.xlsx", "post_pre_xlsx", "editor_pre_xlsx")
 
 def tab_pre_bcp_txt():
     st.header("PRE BCP-txt")
@@ -330,8 +353,7 @@ def tab_pre_bcp_txt():
             df_out["Descripcion de Rechazo"] = desc
             df_out = df_out[OUT_COLS]
 
-            # Reemplazo DRY
-            render_final_output(df_out, "pre_bcp_txt.xlsx", "post_pre_txt")
+            render_final_output(df_out, "pre_bcp_txt.xlsx", "post_pre_txt", "editor_pre_txt")
 
 def tab_rechazo_ibk():
     st.header("rechazo IBK")
@@ -367,8 +389,7 @@ def tab_rechazo_ibk():
             ]
             df_out = df_out[OUT_COLS]
 
-            # Reemplazo DRY
-            render_final_output(df_out, "rechazo_ibk.xlsx", "post_ibk")
+            render_final_output(df_out, "rechazo_ibk.xlsx", "post_ibk", "editor_ibk")
 
 def tab_post_bcp_xlsx():
     st.header("POST BCP-xlsx")
@@ -403,38 +424,12 @@ def tab_post_bcp_xlsx():
                 "Referencia": ref_out,
             })
             
+            df_out["Estado"] = ESTADO
             df_out["Codigo de Rechazo"] = code
-            valid_codes = list(CODE_DESC.keys())
+            df_out["Descripcion de Rechazo"] = desc
+            df_out = df_out[OUT_COLS]
 
-            st.subheader("Registros encontrados (editables)")
-            st.caption("Puedes cambiar el 'Código de Rechazo' de cada fila usando el desplegable.")
-
-            edited_df = st.data_editor(
-                df_out,
-                column_config={
-                    "Codigo de Rechazo": st.column_config.SelectboxColumn(
-                        "Código de Rechazo",
-                        help="Seleccione un código para esta fila",
-                        options=valid_codes,
-                        required=True,
-                    ),
-                    "dni/cex": st.column_config.TextColumn("DNI/CEX", disabled=True),
-                    "nombre": st.column_config.TextColumn("Nombre", disabled=True),
-                    "importe": st.column_config.NumberColumn("Importe", format="%.2f", disabled=True),
-                    "Referencia": st.column_config.TextColumn("Referencia", disabled=True),
-                },
-                use_container_width=True,
-                num_rows="dynamic",
-                key="editor_post_bcp"
-            )
-
-            df_final = edited_df.copy()
-            df_final["Estado"] = ESTADO
-            df_final["Descripcion de Rechazo"] = df_final["Codigo de Rechazo"].map(CODE_DESC)
-            df_final = df_final[OUT_COLS]
-
-            # Reemplazo DRY (show_df=False porque st.data_editor ya lo dibujó arriba)
-            render_final_output(df_final, "post_bcp_xlsx.xlsx", "post_post_xlsx", show_df=False)
+            render_final_output(df_out, "post_bcp_xlsx.xlsx", "post_post_xlsx", "editor_post_bcp")
             
 def tab_sco_processor():
     st.header("Procesador Scotiabank (Redefinido)")
@@ -537,102 +532,81 @@ def tab_sco_processor():
 
         if rows_to_reject:
             df_out = pd.DataFrame(rows_to_reject)
-            valid_codes = list(CODE_DESC.keys())
-            
-            edited_df = st.data_editor(
-                df_out,
-                column_config={
-                    "Codigo de Rechazo": st.column_config.SelectboxColumn(
-                        "Código de Rechazo", options=valid_codes, required=True
-                    ),
-                    "Descripcion de Rechazo": st.column_config.TextColumn("Descripción (Auto)", disabled=True),
-                    "dni/cex": st.column_config.TextColumn("DNI/CEX", disabled=True),
-                    "nombre": st.column_config.TextColumn("Nombre", disabled=True),
-                    "importe": st.column_config.NumberColumn("Importe", format="%.2f", disabled=True),
-                    "Referencia": st.column_config.TextColumn("Referencia", disabled=True),
-                },
-                use_container_width=True,
-                num_rows="dynamic",
-                key="editor_sco_simple"
-            )
-            
-            df_final = edited_df.copy()
-            df_final["Estado"] = ESTADO
-            df_final["Descripcion de Rechazo"] = df_final["Codigo de Rechazo"].map(CODE_DESC)
-            df_final = df_final[OUT_COLS]
+            df_out["Estado"] = ESTADO
+            df_out = df_out[OUT_COLS]
 
-            # Reemplazo DRY (show_df=False porque st.data_editor ya lo dibujó arriba)
-            render_final_output(df_final, "rechazos_sco.xlsx", "post_sco_simple", show_df=False)
+            render_final_output(df_out, "rechazos_sco.xlsx", "post_sco_simple", "editor_sco_simple")
         
         elif xls_file:
             st.info("El archivo XLS se leyó, pero no contenía líneas válidas para rechazar.")
 
     elif not pdf_file and not txt_file:
         st.info("👆 Carga los archivos arriba para comenzar.")
-        
+
 def tab_rechazo_total_txt():
     st.header("Rechazo TOTAL (Banco Inoperativo)")
-    st.warning("⚠️ ESTA OPCIÓN RECHAZARÁ TODO EL ARCHIVO TXT CON EL CÓDIGO R020.")
+    st.warning("⚠️ ESTA OPCIÓN RECHAZARÁ TODO EL ARCHIVO EXCEL CON EL CÓDIGO SELECCIONADO.")
 
-    txt_file = st.file_uploader("Cargar TXT Masivo para rechazar totalmente", type="txt", key="total_txt")
+    # Agregamos el selector visual con R020 como valor por defecto
+    code, desc = select_code("total_excel_code", "R020")
+
+    ex_file = st.file_uploader("Cargar Excel Masivo para rechazar totalmente", type=["xlsx", "xls", "csv"], key="total_excel")
     
-    if txt_file:
-        with st.spinner("Procesando rechazo total (Formato 2 líneas)..."):
-            content = txt_file.read().decode("utf-8", errors="ignore")
-            lines = content.splitlines()
+    if ex_file:
+        with st.spinner("Procesando rechazo total..."):
+            if ex_file.name.endswith(".csv"):
+                df_raw = pd.read_csv(ex_file, dtype=str)
+            else:
+                df_raw = pd.read_excel(ex_file, dtype=str)
             
-            if len(lines) > 0:
-                lines = lines[1:]
+            # Buscar columna REFERENCIA (ignorando mayúsculas/minúsculas y espacios)
+            col_ref = None
+            for col in df_raw.columns:
+                if str(col).strip().upper() == "REFERENCIA":
+                    col_ref = col
+                    break
+            
+            if col_ref is None:
+                st.error("No se encontró la columna 'REFERENCIA' en el archivo.")
+                return
+            
+            # Filtrar filas donde la referencia no sea nula o vacía
+            df_valid = df_raw.dropna(subset=[col_ref]).copy()
+            df_valid[col_ref] = df_valid[col_ref].astype(str).str.strip()
+            df_valid = df_valid[df_valid[col_ref] != ""]
+            df_valid = df_valid[df_valid[col_ref].str.lower() != "nan"]
+            df_valid = df_valid.reset_index(drop=True)
 
-            rows = []
-            i = 0
-            while i < len(lines):
-                line1 = lines[i]
-                dni_candidate = line1[24:32].strip()
-                
-                if len(dni_candidate) >= 6 and dni_candidate.isdigit() and (i + 1) < len(lines):
-                    line2 = lines[i + 1]
-                    
-                    dni = dni_candidate
-                    nombre = line1[39:80].strip()
-                    ref = line1[114:126].strip()
-                    
-                    imp_str = line2[25:34].strip()
-                    imp = parse_amount(imp_str)
-                    
-                    rows.append({
-                        "dni/cex": dni,
-                        "nombre": nombre,
-                        "importe": imp,
-                        "Referencia": ref,
-                    })
-                    
-                    i += 2
-                else:
-                    i += 1
-
-            if not rows:
-                st.error("No se detectaron registros válidos. Verifique que el archivo no esté vacío.")
+            if df_valid.empty:
+                st.error("No se detectaron registros válidos en la columna 'REFERENCIA'.")
                 return
 
-            df_out = pd.DataFrame(rows)
+            # Construir DataFrame de salida
+            df_out = pd.DataFrame({
+                "dni/cex": ["" for _ in range(len(df_valid))],
+                "nombre": ["" for _ in range(len(df_valid))],
+                "importe": [0.0 for _ in range(len(df_valid))],
+                "Referencia": df_valid[col_ref],
+            })
+
             df_out["Estado"] = ESTADO
-            df_out["Codigo de Rechazo"] = "R020"
-            df_out["Descripcion de Rechazo"] = CODE_DESC["R020"]
+            df_out["Codigo de Rechazo"] = code
+            df_out["Descripcion de Rechazo"] = desc
+            
             df_out = df_out[OUT_COLS]
 
-            # Reemplazo DRY
-            render_final_output(df_out, "rechazo_total_inoperativo.xlsx", "post_total_txt", "editor_total_txt")
+            render_final_output(df_out, "rechazo_total_inoperativo.xlsx", "post_total_excel", "editor_total_excel")
 
 def tab_bcp_prueba():
     st.header("BCP Prueba")
     st.info("Módulo para procesar rechazos desde Excel BCP basado en la columna 'Observación'.")
     
+    code, desc = select_code("bcp_prueba_code", "R001")
+    
     ex_file = st.file_uploader("Cargar Excel BCP (.xlsx o .csv)", type=["xlsx", "xls", "csv"], key="bcp_prueba_file")
     
     if ex_file:
         with st.spinner("Procesando BCP prueba…"):
-            # Permite probar también con CSV si es necesario basado en el ejemplo subido
             if ex_file.name.endswith(".csv"):
                 df_raw = pd.read_csv(ex_file, dtype=str)
             else:
@@ -642,7 +616,6 @@ def tab_bcp_prueba():
                 st.error("No se encontró la columna 'Observación' en el archivo.")
                 return
             
-            # Filtrar donde Observación no sea nula y sea diferente de "Ninguna"
             mask = df_raw["Observación"].notna() & (df_raw["Observación"].str.strip().str.lower() != "ninguna")
             df_valid = df_raw.loc[mask].reset_index(drop=True)
             
@@ -650,29 +623,23 @@ def tab_bcp_prueba():
                 st.warning("No se encontraron registros con observaciones diferentes a 'Ninguna'.")
                 return
             
-            # Identificar columnas. Pandas renombra columnas duplicadas añadiendo .1, .2, etc.
-            # "Documento" suele ser el DNI, "Documento.1" suele ser el PSPTIN (que inicia con 000).
-            col_dni = "Documento" if "Documento" in df_valid.columns else df_valid.columns[3]
-            col_ref = "Documento.1" if "Documento.1" in df_valid.columns else df_valid.columns[5]
-            col_nombre = "Beneficiario - Nombre" if "Beneficiario - Nombre" in df_valid.columns else df_valid.columns[1]
-            col_importe = "Monto" if "Monto" in df_valid.columns else df_valid.columns[7]
+            # Extraer columnas usando los mismos índices idénticos que "POST BCP-xlsx"
+            ref_out = df_valid.iloc[:, 7] if df_valid.shape[1] > 7 else pd.Series([""] * len(df_valid))
+            nombre_out = df_valid.iloc[:, 3] if df_valid.shape[1] > 3 else (df_valid.iloc[:, 1] if df_valid.shape[1] > 1 else pd.Series([""] * len(df_valid)))
 
             df_out = pd.DataFrame({
-                "dni/cex": df_valid[col_dni],
-                "nombre": df_valid[col_nombre],
-                "importe": df_valid[col_importe].apply(parse_amount),
-                "Referencia": df_valid[col_ref].astype(str).apply(lambda x: x[3:] if x.startswith("000") else x),
+                "dni/cex": df_valid.iloc[:, 0],
+                "nombre": nombre_out,
+                "importe": df_valid.iloc[:, 12].apply(parse_amount) if df_valid.shape[1] > 12 else pd.Series([0.0] * len(df_valid)),
+                "Referencia": ref_out.astype(str).apply(lambda x: x[3:] if x.startswith("000") else x),
             })
             
             df_out["Estado"] = ESTADO
-            
-            # Asignar el Código de Rechazo por defecto R001 sin importar el contenido
-            df_out["Codigo de Rechazo"] = "R001"
-            df_out["Descripcion de Rechazo"] = CODE_DESC["R001"]
+            df_out["Codigo de Rechazo"] = code
+            df_out["Descripcion de Rechazo"] = desc
             
             df_out = df_out[OUT_COLS]
 
-            # Usamos el reemplazo DRY para tener la tabla editable y los botones estándar
             render_final_output(df_out, "rechazo_bcp_prueba.xlsx", "post_bcp_prueba", "editor_bcp_prueba")
 
 # -------------- Render pestañas --------------
