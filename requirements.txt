@@ -4,4 +4,3 @@ openpyxl
 PyMuPDF
 requests
 xlrd
-pdfplumber
