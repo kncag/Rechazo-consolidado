@@ -292,6 +292,7 @@ def map_sco_xls_error_to_code(observation: str) -> tuple[str, str]:
 
 # -------------- Flujos --------------
 def tab_pre_bcp_xlsx():
+    # Antigua manera conservada en el código, pero ya no en las pestañas visuales.
     st.header("Antigua manera de rechazar con PDF")
     code, desc = select_code("pre_xlsx_code", "R002")
 
@@ -331,7 +332,7 @@ def tab_pre_bcp_xlsx():
             render_final_output(df_out, "pre_bcp_xlsx.xlsx", "post_pre_xlsx", "editor_pre_xlsx")
 
 def tab_pre_bcp_txt():
-    st.header("PRE BCP-txt")
+    st.subheader("PRE RECHAZO BCP")
     code, desc = select_code("pre_txt_code", "R002")
 
     pdf_file = st.file_uploader("PDF", type="pdf", key="pre_txt_pdf")
@@ -375,8 +376,66 @@ def tab_pre_bcp_txt():
 
             render_final_output(df_out, "pre_bcp_txt.xlsx", "post_pre_txt", "editor_pre_txt")
 
+def tab_bcp_prueba():
+    st.subheader("POST RECHAZO BCP")
+    st.info("Módulo para procesar rechazos desde Excel BCP basado en la columna 'Observación'.")
+    
+    code, desc = select_code("bcp_prueba_code", "R001")
+    
+    ex_file = st.file_uploader("Cargar Excel BCP (.xlsx o .csv)", type=["xlsx", "xls", "csv"], key="bcp_prueba_file")
+    
+    if ex_file:
+        with st.spinner("Procesando POST RECHAZO BCP…"):
+            if ex_file.name.endswith(".csv"):
+                df_raw = pd.read_csv(ex_file, dtype=str)
+            else:
+                df_raw = pd.read_excel(ex_file, dtype=str)
+            
+            if "Observación" not in df_raw.columns:
+                st.error("No se encontró la columna 'Observación' en el archivo.")
+                return
+            
+            mask = df_raw["Observación"].notna() & (df_raw["Observación"].str.strip().str.lower() != "ninguna")
+            df_valid = df_raw.loc[mask].reset_index(drop=True)
+            
+            if df_valid.empty:
+                st.warning("No se encontraron registros con observaciones diferentes a 'Ninguna'.")
+                return
+            
+            # Extraer columnas usando nombres explícitos o índices exactos (D=3, F=5)
+            nombre_out = df_valid["Beneficiario - Nombre"] if "Beneficiario - Nombre" in df_valid.columns else pd.Series([""] * len(df_valid))
+            
+            # DNI desde la columna D (índice 3)
+            dni_out = df_valid.iloc[:, 3] if df_valid.shape[1] > 3 else pd.Series([""] * len(df_valid))
+            
+            # Referencia desde la columna F (índice 5)
+            ref_out = df_valid.iloc[:, 5] if df_valid.shape[1] > 5 else pd.Series([""] * len(df_valid))
+            
+            importe_out = df_valid["Monto"].apply(parse_amount) if "Monto" in df_valid.columns else pd.Series([0.0] * len(df_valid))
+
+            df_out = pd.DataFrame({
+                "dni/cex": dni_out,
+                "nombre": nombre_out,
+                "importe": importe_out,
+                "Referencia": ref_out.astype(str).apply(lambda x: x[3:] if x.startswith("000") else x),
+            })
+            
+            df_out["Estado"] = ESTADO
+            df_out["Codigo de Rechazo"] = code
+            df_out["Descripcion de Rechazo"] = desc
+            
+            df_out = df_out[OUT_COLS]
+
+            render_final_output(df_out, "rechazo_bcp_prueba.xlsx", "post_bcp_prueba", "editor_bcp_prueba")
+
+def tab_bcp():
+    st.header("BCP")
+    tab_pre_bcp_txt()
+    st.divider()
+    tab_bcp_prueba()
+
 def tab_rechazo_ibk():
-    st.header("rechazo IBK")
+    st.header("IBK")
 
     zip_file = st.file_uploader("ZIP con Excel", type="zip", key="ibk_zip")
     if zip_file:
@@ -412,7 +471,7 @@ def tab_rechazo_ibk():
             render_final_output(df_out, "rechazo_ibk.xlsx", "post_ibk", "editor_ibk")
 
 def tab_post_bcp_xlsx():
-    st.header("POST BCP-xlsx")
+    st.header("BBVA")
     
     code, desc = select_code("post_xlsx_code", "R001")
     st.info("Elige un código por defecto. Podrás editar cada fila individualmente en la tabla de resultados.")
@@ -421,7 +480,7 @@ def tab_post_bcp_xlsx():
     ex_file = st.file_uploader("Excel masivo", type="xlsx", key="post_xlsx_xls")
     
     if pdf_file and ex_file:
-        with st.spinner("Procesando POST BCP-xlsx…"):
+        with st.spinner("Procesando BBVA…"):
             pdf_bytes = pdf_file.read()
             text = "".join(p.get_text() or "" for p in fitz.open(stream=io.BytesIO(pdf_bytes), filetype="pdf"))
             docs = set(re.findall(r"\b\d{6,}\b", text))
@@ -449,10 +508,10 @@ def tab_post_bcp_xlsx():
             df_out["Descripcion de Rechazo"] = desc
             df_out = df_out[OUT_COLS]
 
-            render_final_output(df_out, "post_bcp_xlsx.xlsx", "post_post_xlsx", "editor_post_bcp")
+            render_final_output(df_out, "rechazos_bbva.xlsx", "post_post_xlsx", "editor_post_bcp")
             
 def tab_sco_processor():
-    st.header("Procesador Scotiabank (Redefinido)")
+    st.header("SCO")
     st.info("Módulo simplificado: Auditoría de cantidades y Procesamiento de errores por Excel.")
 
     col_up1, col_up2, col_up3 = st.columns(3)
@@ -617,80 +676,23 @@ def tab_rechazo_total_txt():
 
             render_final_output(df_out, "rechazo_total_inoperativo.xlsx", "post_total_excel", "editor_total_excel")
 
-def tab_bcp_prueba():
-    st.header("BCP Prueba")
-    st.info("Módulo para procesar rechazos desde Excel BCP basado en la columna 'Observación'.")
-    
-    code, desc = select_code("bcp_prueba_code", "R001")
-    
-    ex_file = st.file_uploader("Cargar Excel BCP (.xlsx o .csv)", type=["xlsx", "xls", "csv"], key="bcp_prueba_file")
-    
-    if ex_file:
-        with st.spinner("Procesando BCP prueba…"):
-            if ex_file.name.endswith(".csv"):
-                df_raw = pd.read_csv(ex_file, dtype=str)
-            else:
-                df_raw = pd.read_excel(ex_file, dtype=str)
-            
-            if "Observación" not in df_raw.columns:
-                st.error("No se encontró la columna 'Observación' en el archivo.")
-                return
-            
-            mask = df_raw["Observación"].notna() & (df_raw["Observación"].str.strip().str.lower() != "ninguna")
-            df_valid = df_raw.loc[mask].reset_index(drop=True)
-            
-            if df_valid.empty:
-                st.warning("No se encontraron registros con observaciones diferentes a 'Ninguna'.")
-                return
-            
-            # Extraer columnas usando nombres explícitos o índices exactos (D=3, F=5)
-            nombre_out = df_valid["Beneficiario - Nombre"] if "Beneficiario - Nombre" in df_valid.columns else pd.Series([""] * len(df_valid))
-            
-            # DNI desde la columna D (índice 3)
-            dni_out = df_valid.iloc[:, 3] if df_valid.shape[1] > 3 else pd.Series([""] * len(df_valid))
-            
-            # Referencia desde la columna F (índice 5)
-            ref_out = df_valid.iloc[:, 5] if df_valid.shape[1] > 5 else pd.Series([""] * len(df_valid))
-            
-            importe_out = df_valid["Monto"].apply(parse_amount) if "Monto" in df_valid.columns else pd.Series([0.0] * len(df_valid))
-
-            df_out = pd.DataFrame({
-                "dni/cex": dni_out,
-                "nombre": nombre_out,
-                "importe": importe_out,
-                "Referencia": ref_out.astype(str).apply(lambda x: x[3:] if x.startswith("000") else x),
-            })
-            
-            df_out["Estado"] = ESTADO
-            df_out["Codigo de Rechazo"] = code
-            df_out["Descripcion de Rechazo"] = desc
-            
-            df_out = df_out[OUT_COLS]
-
-            render_final_output(df_out, "rechazo_bcp_prueba.xlsx", "post_bcp_prueba", "editor_bcp_prueba")
 
 # -------------- Render pestañas --------------
 tabs = st.tabs([
-    "PRE BCP-txt",
-    "-", 
-    "rechazo IBK",
-    "POST BCP-xlsx",
-    "Procesador SCO",
+    "BCP",
+    "IBK",
+    "BBVA",
+    "SCO",
     "Rechazo TOTAL",
-    "BCP Prueba",
 ])
 
 with tabs[0]:
-    tab_pre_bcp_txt()
+    tab_bcp()
 with tabs[1]:
-    tab_pre_bcp_xlsx()
-with tabs[2]:
     tab_rechazo_ibk()
-with tabs[3]:
+with tabs[2]:
     tab_post_bcp_xlsx()
-with tabs[4]:          
+with tabs[3]:          
     tab_sco_processor()
-with tabs[5]:
+with tabs[4]:
     tab_rechazo_total_txt()
-with tabs[6]:
-    tab_bcp_prueba()
