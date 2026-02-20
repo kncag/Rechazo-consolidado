@@ -661,20 +661,14 @@ def tab_bcp_prueba():
                 "dni/cex": df_valid[col_dni],
                 "nombre": df_valid[col_nombre],
                 "importe": df_valid[col_importe].apply(parse_amount),
-                "Referencia": df_valid[col_ref],
+                "Referencia": df_valid[col_ref].astype(str).apply(lambda x: x[3:] if x.startswith("000") else x),
             })
             
             df_out["Estado"] = ESTADO
             
-            # Lógica idéntica a la pestaña IBK para asignar el Código de Rechazo basado en la Observación
-            df_out["Codigo de Rechazo"] = [
-                "R016" if any(k in str(o).lower() for k in KEYWORDS_NO_TIT) else "R002"
-                for o in df_valid["Observación"]
-            ]
-            df_out["Descripcion de Rechazo"] = [
-                "CLIENTE NO TITULAR DE LA CUENTA" if any(k in str(o).lower() for k in KEYWORDS_NO_TIT) else "CUENTA INVALIDA"
-                for o in df_valid["Observación"]
-            ]
+            # Asignar el Código de Rechazo por defecto R001 sin importar el contenido
+            df_out["Codigo de Rechazo"] = "R001"
+            df_out["Descripcion de Rechazo"] = CODE_DESC["R001"]
             
             df_out = df_out[OUT_COLS]
 
