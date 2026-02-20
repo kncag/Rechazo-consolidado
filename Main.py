@@ -626,8 +626,8 @@ def tab_bcp_prueba():
             # Extraer columnas usando los nombres de los encabezados indicados:
             nombre_out = df_valid["Beneficiario - Nombre"] if "Beneficiario - Nombre" in df_valid.columns else pd.Series([""] * len(df_valid))
             ref_out = df_valid["Documento"] if "Documento" in df_valid.columns else pd.Series([""] * len(df_valid))
-            # Asignamos el DNI al segundo Documento.1 si existe, de lo contrario lo dejamos en blanco
-            dni_out = df_valid["Documento.1"] if "Documento.1" in df_valid.columns else pd.Series([""] * len(df_valid))
+            # Asignamos el DNI a la columna "Documento - Tipo" si existe, de lo contrario lo dejamos en blanco
+            dni_out = df_valid["Documento - Tipo"] if "Documento - Tipo" in df_valid.columns else pd.Series([""] * len(df_valid))
             importe_out = df_valid["Monto"].apply(parse_amount) if "Monto" in df_valid.columns else pd.Series([0.0] * len(df_valid))
 
             df_out = pd.DataFrame({
