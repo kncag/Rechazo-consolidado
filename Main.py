@@ -547,7 +547,6 @@ def tab_rechazo_total_txt():
     st.header("Rechazo TOTAL (Banco Inoperativo)")
     st.warning("⚠️ ESTA OPCIÓN RECHAZARÁ TODO EL ARCHIVO EXCEL CON EL CÓDIGO SELECCIONADO.")
 
-    # Agregamos el selector visual con R020 como valor por defecto
     code, desc = select_code("total_excel_code", "R020")
 
     ex_file = st.file_uploader("Cargar Excel Masivo para rechazar totalmente", type=["xlsx", "xls", "csv"], key="total_excel")
@@ -559,34 +558,35 @@ def tab_rechazo_total_txt():
             else:
                 df_raw = pd.read_excel(ex_file, dtype=str)
             
-            # Buscar columna REFERENCIA (ignorando mayúsculas/minúsculas y espacios)
-            col_ref = None
-            for col in df_raw.columns:
-                if str(col).strip().upper() == "REFERENCIA":
-                    col_ref = col
-                    break
-            
-            if col_ref is None:
-                st.error("No se encontró la columna 'REFERENCIA' en el archivo.")
+            # El input tiene la misma estructura que POST BCP-xlsx (Referencia en columna 7)
+            if df_raw.shape[1] <= 7:
+                st.error("El archivo no tiene las columnas necesarias (se espera el formato POST BCP-xlsx).")
                 return
             
-            # Filtrar filas donde la referencia no sea nula o vacía
-            df_valid = df_raw.dropna(subset=[col_ref]).copy()
-            df_valid[col_ref] = df_valid[col_ref].astype(str).str.strip()
-            df_valid = df_valid[df_valid[col_ref] != ""]
-            df_valid = df_valid[df_valid[col_ref].str.lower() != "nan"]
+            # Usar la columna 7 (Referencia) para validar nulos y eliminar celdas vacías
+            col_ref_name = df_raw.columns[7]
+            df_valid = df_raw.dropna(subset=[col_ref_name]).copy()
+            df_valid[col_ref_name] = df_valid[col_ref_name].astype(str).str.strip()
+            df_valid = df_valid[df_valid[col_ref_name] != ""]
+            df_valid = df_valid[df_valid[col_ref_name].str.lower() != "nan"]
             df_valid = df_valid.reset_index(drop=True)
 
             if df_valid.empty:
-                st.error("No se detectaron registros válidos en la columna 'REFERENCIA'.")
+                st.error("No se detectaron registros válidos en la columna de Referencia (columna 8).")
                 return
 
-            # Construir DataFrame de salida
+            # Extraemos las mismas columnas que en POST BCP-xlsx
+            dni_out = df_valid.iloc[:, 0]
+            nombre_out = df_valid.iloc[:, 3] if df_valid.shape[1] > 3 else (df_valid.iloc[:, 1] if df_valid.shape[1] > 1 else pd.Series([""] * len(df_valid)))
+            ref_out = df_valid.iloc[:, 7]
+            importe_out = df_valid.iloc[:, 12].apply(parse_amount) if df_valid.shape[1] > 12 else pd.Series([0.0] * len(df_valid))
+
+            # Construir DataFrame de salida con todo el contenido
             df_out = pd.DataFrame({
-                "dni/cex": ["" for _ in range(len(df_valid))],
-                "nombre": ["" for _ in range(len(df_valid))],
-                "importe": [0.0 for _ in range(len(df_valid))],
-                "Referencia": df_valid[col_ref],
+                "dni/cex": dni_out,
+                "nombre": nombre_out,
+                "importe": importe_out,
+                "Referencia": ref_out,
             })
 
             df_out["Estado"] = ESTADO
@@ -623,14 +623,17 @@ def tab_bcp_prueba():
                 st.warning("No se encontraron registros con observaciones diferentes a 'Ninguna'.")
                 return
             
-            # Extraer columnas usando los mismos índices idénticos que "POST BCP-xlsx"
-            ref_out = df_valid.iloc[:, 7] if df_valid.shape[1] > 7 else pd.Series([""] * len(df_valid))
-            nombre_out = df_valid.iloc[:, 3] if df_valid.shape[1] > 3 else (df_valid.iloc[:, 1] if df_valid.shape[1] > 1 else pd.Series([""] * len(df_valid)))
+            # Extraer columnas usando los índices basados en los encabezados reales indicados:
+            # 0: Beneficiario - Nombre, 2: Documento (DNI), 4: Documento.1 (Referencia), 6: Monto (Importe)
+            nombre_out = df_valid.iloc[:, 0] if df_valid.shape[1] > 0 else pd.Series([""] * len(df_valid))
+            dni_out = df_valid.iloc[:, 2] if df_valid.shape[1] > 2 else pd.Series([""] * len(df_valid))
+            ref_out = df_valid.iloc[:, 4] if df_valid.shape[1] > 4 else pd.Series([""] * len(df_valid))
+            importe_out = df_valid.iloc[:, 6].apply(parse_amount) if df_valid.shape[1] > 6 else pd.Series([0.0] * len(df_valid))
 
             df_out = pd.DataFrame({
-                "dni/cex": df_valid.iloc[:, 0],
+                "dni/cex": dni_out,
                 "nombre": nombre_out,
-                "importe": df_valid.iloc[:, 12].apply(parse_amount) if df_valid.shape[1] > 12 else pd.Series([0.0] * len(df_valid)),
+                "importe": importe_out,
                 "Referencia": ref_out.astype(str).apply(lambda x: x[3:] if x.startswith("000") else x),
             })
             
