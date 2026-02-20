@@ -1,12 +1,9 @@
-# streamlit_app.py
-
 import io
 import re
 import zipfile
 import requests
 import streamlit as st
 import pandas as pd
-import pdfplumber
 
 try:
     import fitz  # PyMuPDF
@@ -131,7 +128,7 @@ def _validate_and_post(df: pd.DataFrame, button_key: str):
     if list(df.columns) != OUT_COLS:
         st.error(f"Encabezados inválidos. Se requieren: {OUT_COLS}")
         return
-    if st.button("RECH-POSTMAN", key=button_key):
+    if st.button("RECH-POSTMAN", key=button_key, use_container_width=True):
         payload = df[SUBSET_COLS]
         excel_bytes = df_to_excel_bytes(payload)
         status, resp = post_to_endpoint(excel_bytes)
@@ -141,6 +138,31 @@ def _count_and_sum(df: pd.DataFrame) -> tuple[int, float]:
     cnt = len(df)
     total = df["importe"].sum() if "importe" in df.columns else 0.0
     return cnt, total
+
+def render_final_output(df: pd.DataFrame, file_name: str, post_key: str, show_df: bool = True):
+    """
+    Función DRY que centraliza el cálculo de totales, dibujo de la tabla (opcional)
+    y la creación de los botones de Excel y POST en un formato estandarizado de 2 columnas.
+    """
+    cnt, total = _count_and_sum(df)
+    st.write(f"**Total transacciones:** {cnt}   |   **Suma de importes:** {total:,.2f}")
+    
+    if show_df:
+        st.dataframe(df)
+        
+    eb = df_to_excel_bytes(df)
+    
+    col1, col2 = st.columns(2)
+    with col1:
+        st.download_button(
+            "Descargar excel de registros",
+            eb,
+            file_name=file_name,
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            use_container_width=True
+        )
+    with col2:
+        _validate_and_post(df, post_key)
 
 def _find_situacion_column_in_df(df: pd.DataFrame) -> str | None:
     def norm(s: str) -> str:
@@ -167,7 +189,6 @@ def _map_situacion_to_code(s: str) -> tuple[str, str]:
     if "CUENTA CANCELADA" in su or "CANCELADA" in su:
         return "R002", "CUENTA CANCELADA"
     return "R002", "CUENTA INVALIDA"
-# ... (después de la función _map_situacion_to_code)
 
 def parse_sco_importe(raw: str) -> float:
     """Convierte un importe de TXT Scotiabank (ej. '00000004814') a float."""
@@ -209,7 +230,6 @@ def map_sco_pdf_error_to_code(line: str) -> tuple[str | None, str, str]:
         return None, "", ""  # No es un error
     
     # 5. Si no es éxito ni error conocido, es un rechazo genérico
-    # Esta regla ya no se basará en mi ejemplo erróneo de "181-0"
     return dni, "R002", "CUENTA INVALIDA"
 
 def map_sco_xls_error_to_code(observation: str) -> tuple[str, str]:
@@ -264,20 +284,8 @@ def tab_pre_bcp_xlsx():
             df_out["Descripcion de Rechazo"] = desc
             df_out = df_out[OUT_COLS]
 
-            cnt, total = _count_and_sum(df_out)
-            st.write(f"**Total transacciones:** {cnt}   |   **Suma de importes:** {total:,.2f}")
-
-            st.dataframe(df_out)
-
-            eb = df_to_excel_bytes(df_out)
-            st.download_button(
-                "Descargar excel de registros",
-                eb,
-                file_name="pre_bcp_xlsx.xlsx",
-                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-            )
-
-            _validate_and_post(df_out, "post_pre_xlsx")
+            # Reemplazo DRY
+            render_final_output(df_out, "pre_bcp_xlsx.xlsx", "post_pre_xlsx")
 
 def tab_pre_bcp_txt():
     st.header("PRE BCP-txt")
@@ -322,20 +330,8 @@ def tab_pre_bcp_txt():
             df_out["Descripcion de Rechazo"] = desc
             df_out = df_out[OUT_COLS]
 
-            cnt, total = _count_and_sum(df_out)
-            st.write(f"**Total transacciones:** {cnt}   |   **Suma de importes:** {total:,.2f}")
-
-            st.dataframe(df_out)
-
-            eb = df_to_excel_bytes(df_out)
-            st.download_button(
-                "Descargar excel de registros",
-                eb,
-                file_name="pre_bcp_txt.xlsx",
-                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-            )
-
-            _validate_and_post(df_out, "post_pre_txt")
+            # Reemplazo DRY
+            render_final_output(df_out, "pre_bcp_txt.xlsx", "post_pre_txt")
 
 def tab_rechazo_ibk():
     st.header("rechazo IBK")
@@ -371,25 +367,12 @@ def tab_rechazo_ibk():
             ]
             df_out = df_out[OUT_COLS]
 
-            cnt, total = _count_and_sum(df_out)
-            st.write(f"**Total transacciones:** {cnt}   |   **Suma de importes:** {total:,.2f}")
-
-            st.dataframe(df_out)
-
-            eb = df_to_excel_bytes(df_out)
-            st.download_button(
-                "Descargar excel de registros",
-                eb,
-                file_name="rechazo_ibk.xlsx",
-                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-            )
-
-            _validate_and_post(df_out, "post_ibk")
+            # Reemplazo DRY
+            render_final_output(df_out, "rechazo_ibk.xlsx", "post_ibk")
 
 def tab_post_bcp_xlsx():
     st.header("POST BCP-xlsx")
     
-    # 1. Los botones siguen aquí, ahora definen el CÓDIGO POR DEFECTO
     code, desc = select_code("post_xlsx_code", "R001")
     st.info("Elige un código por defecto. Podrás editar cada fila individualmente en la tabla de resultados.")
 
@@ -412,10 +395,7 @@ def tab_post_bcp_xlsx():
 
             ref_out = df_temp.iloc[:, 7] if df_temp.shape[1] > 7 else pd.Series([""] * len(df_temp))
             nombre_out = df_temp.iloc[:, 3] if df_temp.shape[1] > 3 else (df_temp.iloc[:, 1] if df_temp.shape[1] > 1 else pd.Series([""] * len(df_temp)))
-
-            # --- MODIFICACIÓN INICIA ---
             
-            # 2. Se crea el DataFrame BASE (solo con los datos extraídos)
             df_out = pd.DataFrame({
                 "dni/cex": df_temp.iloc[:, 0],
                 "nombre": nombre_out,
@@ -423,16 +403,12 @@ def tab_post_bcp_xlsx():
                 "Referencia": ref_out,
             })
             
-            # 3. Se asigna el CÓDIGO POR DEFECTO a la nueva columna
             df_out["Codigo de Rechazo"] = code
-            
-            # 4. Obtenemos la lista de códigos válidos para el desplegable
             valid_codes = list(CODE_DESC.keys())
 
             st.subheader("Registros encontrados (editables)")
             st.caption("Puedes cambiar el 'Código de Rechazo' de cada fila usando el desplegable.")
 
-            # 5. REEMPLAZAMOS st.dataframe POR st.data_editor
             edited_df = st.data_editor(
                 df_out,
                 column_config={
@@ -442,48 +418,28 @@ def tab_post_bcp_xlsx():
                         options=valid_codes,
                         required=True,
                     ),
-                    # Configuramos las otras columnas como "deshabilitadas" para evitar editarlas
                     "dni/cex": st.column_config.TextColumn("DNI/CEX", disabled=True),
                     "nombre": st.column_config.TextColumn("Nombre", disabled=True),
                     "importe": st.column_config.NumberColumn("Importe", format="%.2f", disabled=True),
                     "Referencia": st.column_config.TextColumn("Referencia", disabled=True),
                 },
                 use_container_width=True,
-                num_rows="dynamic", # Permite al usuario añadir o eliminar filas si lo necesita
+                num_rows="dynamic",
                 key="editor_post_bcp"
             )
 
-            # 6. Creamos el DataFrame FINAL basado en las ediciones del usuario
             df_final = edited_df.copy()
             df_final["Estado"] = ESTADO
-            
-            # 7. APLICAMOS LA DESCRIPCIÓN BASADA EN EL CÓDIGO DE CADA FILA
             df_final["Descripcion de Rechazo"] = df_final["Codigo de Rechazo"].map(CODE_DESC)
-            
-            # 8. Aseguramos el orden final de las columnas
             df_final = df_final[OUT_COLS]
 
-            # 9. Usamos el 'df_final' (editado) para el resto de operaciones
-            cnt, total = _count_and_sum(df_final)
-            st.write(f"**Total transacciones:** {cnt}  |  **Suma de importes:** {total:,.2f}")
-
-            # 10. El botón de descarga usará el 'df_final'
-            eb = df_to_excel_bytes(df_final)
-            st.download_button(
-                "Descargar excel de registros",
-                eb,
-                file_name="post_bcp_xlsx.xlsx",
-                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-            )
-
-            # 11. El POST usará el 'df_final'
-            _validate_and_post(df_final, "post_post_xlsx")
+            # Reemplazo DRY (show_df=False porque st.data_editor ya lo dibujó arriba)
+            render_final_output(df_final, "post_bcp_xlsx.xlsx", "post_post_xlsx", show_df=False)
             
 def tab_sco_processor():
     st.header("Procesador Scotiabank (Redefinido)")
     st.info("Módulo simplificado: Auditoría de cantidades y Procesamiento de errores por Excel.")
 
-    # 1. Carga de archivos
     col_up1, col_up2, col_up3 = st.columns(3)
     with col_up1:
         pdf_file = st.file_uploader("1. PDF Detalle (Para Auditoría)", type="pdf", key="sco_pdf")
@@ -492,7 +448,6 @@ def tab_sco_processor():
     with col_up3:
         xls_file = st.file_uploader("3. XLS Errores (Para Rechazos)", type=["xls", "xlsx", "csv"], key="sco_xls")
 
-    # Variables compartidas
     txt_lines = []
     
     # ---------------------------------------------------------
@@ -502,26 +457,19 @@ def tab_sco_processor():
         st.divider()
         st.subheader("📊 Sección 1: Auditoría de Cantidades")
         
-        # A. Procesar TXT
         txt_content = txt_file.read().decode("utf-8", errors="ignore")
-        # Filtramos líneas vacías para tener el conteo real de registros
         txt_lines = [line for line in txt_content.splitlines() if line.strip()]
         count_txt = len(txt_lines)
 
-        # B. Procesar PDF (Contar "O.K.")
         pdf_bytes = pdf_file.read()
         pdf_text = ""
         with fitz.open(stream=io.BytesIO(pdf_bytes), filetype="pdf") as doc:
             for page in doc:
                 pdf_text += page.get_text()
         
-        # Normalización de caracteres griegos (Omicron/Kappa) a Latinos
         pdf_text_norm = pdf_text.upper().replace("Ο", "O").replace("Κ", "K")
-        
-        # Contamos cuántas veces aparece "O.K."
         count_ok_pdf = pdf_text_norm.count("O.K.")
 
-        # C. Mostrar Comparación
         c1, c2, c3 = st.columns(3)
         c1.metric("Registros en TXT", count_txt)
         c2.metric("Confirmaciones 'O.K.' en PDF", count_ok_pdf)
@@ -545,10 +493,8 @@ def tab_sco_processor():
         
         rows_to_reject = []
         try:
-            # Leemos el XLS asumiendo que la cabecera está en la fila 7 (index 6)
             df_xls = pd.read_excel(xls_file, header=6, dtype=str)
             
-            # Verificamos que tenga las columnas esperadas
             if "Linea" not in df_xls.columns:
                 st.error("El Excel no tiene la columna 'Linea'. Verifique el formato (header=6).")
             else:
@@ -556,34 +502,24 @@ def tab_sco_processor():
                     linea_val = row.get("Linea")
                     obs_val = row.get("Observación:")
                     
-                    # Validar que sea un número de línea válido
                     if pd.isna(linea_val): 
                         continue
                     
                     try:
-                        # El excel trae "129.0", lo convertimos a entero 129
                         line_idx = int(float(linea_val))
                     except ValueError:
                         continue
 
-                    # Validar que la línea exista en el TXT (TXT es base 0, Excel suele ser base 1)
-                    # PERO: En tu lógica anterior, usabas el número directo. 
-                    # Asumimos que "Linea 1" del Excel corresponde al primer registro del TXT.
-                    
-                    # Ajuste de índice: Si Excel dice 1, es index 0 del array
                     idx_array = line_idx - 1
                     
                     if 0 <= idx_array < len(txt_lines):
                         raw_line = txt_lines[idx_array]
                         
-                        # Extraemos datos del TXT usando tus posiciones fijas
                         dni = slice_fixed(raw_line, *SCO_TXT_POS["dni"])
                         nombre = slice_fixed(raw_line, *SCO_TXT_POS["nombre"])
                         importe = parse_sco_importe(slice_fixed(raw_line, *SCO_TXT_POS["importe"]))
-                        # Referencia especial para SCO (116-127)
                         referencia = slice_fixed(raw_line, 116, 127) 
                         
-                        # Mapeamos el código de error
                         code, desc = map_sco_xls_error_to_code(obs_val)
 
                         rows_to_reject.append({
@@ -592,18 +528,15 @@ def tab_sco_processor():
                             "importe": importe,
                             "Referencia": referencia,
                             "Codigo de Rechazo": code,
-                            "Descripcion de Rechazo": desc # Pre-asignamos para mostrar
+                            "Descripcion de Rechazo": desc
                         })
 
         except Exception as e:
             st.error(f"Error al leer el archivo XLS: {e}")
             st.write("Asegúrese de instalar 'xlrd' si es un archivo .xls antiguo.")
 
-        # Mostrar tabla si hay rechazos
         if rows_to_reject:
             df_out = pd.DataFrame(rows_to_reject)
-            
-            # Preparamos dataframe editable
             valid_codes = list(CODE_DESC.keys())
             
             edited_df = st.data_editor(
@@ -623,26 +556,13 @@ def tab_sco_processor():
                 key="editor_sco_simple"
             )
             
-            # Preparar salida final
             df_final = edited_df.copy()
             df_final["Estado"] = ESTADO
-            # Actualizar descripción por si el usuario cambió el código
             df_final["Descripcion de Rechazo"] = df_final["Codigo de Rechazo"].map(CODE_DESC)
-            df_final = df_final[OUT_COLS] # Ordenar columnas
+            df_final = df_final[OUT_COLS]
 
-            # Métricas finales
-            cnt, total = _count_and_sum(df_final)
-            st.write(f"**Total a rechazar:** {cnt} | **Monto Total:** {total:,.2f}")
-
-            # Botones de Acción
-            col_b1, col_b2 = st.columns(2)
-            with col_b1:
-                eb = df_to_excel_bytes(df_final)
-                st.download_button("Descargar Excel", eb, "rechazos_sco.xlsx", 
-                                 "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", 
-                                 use_container_width=True)
-            with col_b2:
-                _validate_and_post(df_final, "post_sco_simple")
+            # Reemplazo DRY (show_df=False porque st.data_editor ya lo dibujó arriba)
+            render_final_output(df_final, "rechazos_sco.xlsx", "post_sco_simple", show_df=False)
         
         elif xls_file:
             st.info("El archivo XLS se leyó, pero no contenía líneas válidas para rechazar.")
@@ -658,11 +578,9 @@ def tab_rechazo_total_txt():
     
     if txt_file:
         with st.spinner("Procesando rechazo total (Formato 2 líneas)..."):
-            # Leer el archivo
             content = txt_file.read().decode("utf-8", errors="ignore")
             lines = content.splitlines()
             
-            # --- MODIFICACIÓN: Saltar la primera línea (Encabezado) ---
             if len(lines) > 0:
                 lines = lines[1:]
 
@@ -670,27 +588,15 @@ def tab_rechazo_total_txt():
             i = 0
             while i < len(lines):
                 line1 = lines[i]
-                
-                # --- LÓGICA DE DETECCIÓN ---
-                # Verificamos si en la posición del DNI (25-32) hay números.
-                # Índices en Python: 24 al 32
                 dni_candidate = line1[24:32].strip()
                 
-                # Si parece un DNI válido y hay una línea siguiente para el importe
                 if len(dni_candidate) >= 6 and dni_candidate.isdigit() and (i + 1) < len(lines):
-                    
-                    # Capturamos la Línea 2 (la siguiente)
                     line2 = lines[i + 1]
                     
-                    # --- EXTRACCIÓN LINEA 1 ---
                     dni = dni_candidate
-                    # Nombre del 40 al 80 (índices 39:80)
                     nombre = line1[39:80].strip()
-                    # Referencia: 115-126 (índices 114:126)
                     ref = line1[114:126].strip()
                     
-                    # --- EXTRACCIÓN LINEA 2 ---
-                    # Importe del 26 al 34 (índices 25:34)
                     imp_str = line2[25:34].strip()
                     imp = parse_amount(imp_str)
                     
@@ -701,49 +607,23 @@ def tab_rechazo_total_txt():
                         "Referencia": ref,
                     })
                     
-                    # ¡IMPORTANTE! Saltamos 2 líneas (la 1 y la 2 del cliente actual)
                     i += 2
                 else:
-                    # Si la línea no tiene DNI (es basura o separador), avanzamos solo 1
                     i += 1
 
             if not rows:
                 st.error("No se detectaron registros válidos. Verifique que el archivo no esté vacío.")
                 return
 
-            # Crear DataFrame
             df_out = pd.DataFrame(rows)
-            
-            # Asignar valores fijos para TODO el archivo
             df_out["Estado"] = ESTADO
             df_out["Codigo de Rechazo"] = "R020"
             df_out["Descripcion de Rechazo"] = CODE_DESC["R020"]
-            
-            # Ordenar columnas
             df_out = df_out[OUT_COLS]
 
-            # Mostrar métricas
-            cnt, total = _count_and_sum(df_out)
-            st.metric("Total a Rechazar", cnt)
-            st.metric("Monto Total", f"{total:,.2f}")
+            # Reemplazo DRY
+            render_final_output(df_out, "rechazo_total_inoperativo.xlsx", "post_total_txt", "editor_total_txt")
 
-            # Mostrar tabla
-            st.dataframe(df_out)
-
-            # Botones de descarga y envío
-            eb = df_to_excel_bytes(df_out)
-            
-            col1, col2 = st.columns(2)
-            with col1:
-                st.download_button(
-                    "Descargar excel de rechazos",
-                    eb,
-                    file_name="rechazo_total_inoperativo.xlsx",
-                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                    use_container_width=True
-                )
-            with col2:
-                _validate_and_post(df_out, "post_total_txt")
 # -------------- Render pestañas --------------
 tabs = st.tabs([
     "PRE BCP-txt",
