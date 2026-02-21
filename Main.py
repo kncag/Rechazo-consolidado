@@ -43,7 +43,7 @@ SCO_TXT_POS = {
 
 KEYWORDS_NO_TIT = [
     "titular",
-    "beneficiario no",
+    "beneficiario",
     "cliente no titular",
     "no titular",
     "continuar",
