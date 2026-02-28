@@ -71,12 +71,26 @@ SUBSET_COLS = [
 
 # -------------- Utilidades --------------
 def parse_amount(raw) -> float:
-    if raw is None: return 0.0
-    s = re.sub(r"[^\d,.-]", "", str(raw))
-    if "." in s and "," in s: s = s.replace(".", "").replace(",", ".")
-    elif "," in s: s = s.replace(",", ".")
-    parts = s.split(".")
-    if len(parts) > 2: s = "".join(parts[:-1]) + "." + parts[-1]
+    if pd.isna(raw) or raw is None: return 0.0
+    s = str(raw).strip()
+    # Mantiene solo números, comas, puntos y el signo negativo
+    s = re.sub(r"[^\d,.-]", "", s)
+    if not s: return 0.0
+    
+    last_comma = s.rfind(',')
+    last_dot = s.rfind('.')
+    
+    if last_comma > last_dot:
+        # La coma está al final: formato europeo (ej. 1.234,56 o 1234,56)
+        # Excepción: si hay exactamente 3 dígitos después de la coma y no hay punto (ej. 1,000)
+        if last_dot == -1 and len(s) - last_comma - 1 == 3:
+            s = s.replace(',', '') # Es un separador de miles
+        else:
+            s = s.replace('.', '').replace(',', '.')
+    else:
+        # El punto está al final: formato estándar/US (ej. 1,234.56 o 1234.56)
+        s = s.replace(',', '')
+        
     try: return float(s)
     except ValueError: return 0.0
 
@@ -266,7 +280,7 @@ def tab_pre_bcp_txt():
 
 def tab_bcp_prueba():
     st.subheader("POST RECHAZO BCP")
-    st.info("AdJuntar el excel que se descarga de la página del BCP'.")
+    st.info("Módulo para procesar rechazos desde Excel BCP basado en la columna 'Observación'.")
     
     code, desc = select_code("bcp_prueba_code", "R001")
     ex_file = st.file_uploader("Cargar Excel BCP (.xlsx o .csv)", type=["xlsx", "xls", "csv"], key="bcp_prueba_file")
