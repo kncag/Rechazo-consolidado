@@ -413,8 +413,8 @@ def tab_sco_processor():
         match_orden = re.search(r"Detalle de orden No\.?[\s\r\n]*(\d{4})", pdf_text, re.IGNORECASE)
         num_op = f"Número de operación: '9242{match_orden.group(1)}'" if match_orden else "Número de operación: 'No encontrado'"
         
-        # Busca "Total de la orden" y captura todo lo que le sigue hasta el final de esa línea
-        match_total = re.search(r"Total de la orden[\s\r\n:]*([^\r\n]+)", pdf_text, re.IGNORECASE)
+        # Busca "Total de la orden" y captura todo lo que le sigue hasta el final del documento
+        match_total = re.search(r"Total de la orden[\s\r\n:]*(.*)", pdf_text, re.IGNORECASE | re.DOTALL)
         imp_total = match_total.group(1).strip() if match_total else "No encontrado"
         
         # Mostrar la información extraída en la interfaz
