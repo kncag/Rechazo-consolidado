@@ -349,7 +349,19 @@ def tab_rechazo_ibk():
 def tab_post_bcp_xlsx():
     st.header("BBVA")
     
+    # Lógica para pre-seleccionar R007 si el archivo de Excel cargado contiene "OTROS"
+    uploaded_excel = st.session_state.get("post_xlsx_xls")
+    if uploaded_excel:
+        if st.session_state.get("last_bbva_file") != uploaded_excel.name:
+            st.session_state["last_bbva_file"] = uploaded_excel.name
+            if "OTROS" in uploaded_excel.name.upper():
+                st.session_state["post_xlsx_code"] = "R007"
+            else:
+                st.session_state["post_xlsx_code"] = "R001"
+                
     code, desc = select_code("post_xlsx_code", "R001")
+    st.info("Elige un código por defecto. Podrás editar cada fila individualmente en la tabla de resultados.")
+    
     pdf_file = st.file_uploader("PDF de DNIs", type="pdf", key="post_xlsx_pdf")
     ex_file = st.file_uploader("Excel masivo", type="xlsx", key="post_xlsx_xls")
     
@@ -395,6 +407,20 @@ def tab_sco_processor():
         txt_lines = [line for line in txt_content.splitlines() if line.strip()]
         
         pdf_text = extract_text_from_pdf(pdf_file)
+        
+        # --- Extracción de datos específicos del PDF ---
+        # Busca "Detalle de orden No." seguido de espacios/saltos de línea y 4 dígitos
+        match_orden = re.search(r"Detalle de orden No\.?[\s\r\n]*(\d{4})", pdf_text, re.IGNORECASE)
+        num_op = f"Número de operación: '9242{match_orden.group(1)}'" if match_orden else "Número de operación: 'No encontrado'"
+        
+        # Busca "Total de la orden" y captura todo lo que le sigue hasta el final de esa línea
+        match_total = re.search(r"Total de la orden[\s\r\n:]*([^\r\n]+)", pdf_text, re.IGNORECASE)
+        imp_total = match_total.group(1).strip() if match_total else "No encontrado"
+        
+        # Mostrar la información extraída en la interfaz
+        st.info(f"🔹 **{num_op}** &nbsp; | &nbsp; 💰 **Importe total:** {imp_total}")
+        # -----------------------------------------------
+
         count_ok_pdf = pdf_text.upper().replace("Ο", "O").replace("Κ", "K").count("O.K.")
 
         c1, c2, c3 = st.columns(3)
