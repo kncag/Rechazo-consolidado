@@ -128,7 +128,7 @@ def _validate_and_post(df: pd.DataFrame, button_key: str):
     if list(df.columns) != OUT_COLS:
         st.error(f"Encabezados inválidos. Se requieren: {OUT_COLS}")
         return
-    if st.button("RECH-POSTMAN", key=button_key, use_container_width=True):
+    if st.button("RECH-POSTMAN", key=button_key, width='stretch'):
         payload = df[SUBSET_COLS]
         excel_bytes = df_to_excel_bytes(payload)
         status, resp = post_to_endpoint(excel_bytes)
@@ -179,7 +179,7 @@ def render_final_output(df: pd.DataFrame, file_name: str, post_key: str, editor_
             "Referencia": st.column_config.TextColumn("Referencia"), 
             "Estado": st.column_config.TextColumn("Estado", disabled=True),
         },
-        use_container_width=True,
+        width='stretch',
         num_rows="dynamic",
         key=editor_key
     )
@@ -202,7 +202,7 @@ def render_final_output(df: pd.DataFrame, file_name: str, post_key: str, editor_
         
     eb = df_to_excel_bytes(df_final)
     col1, col2 = st.columns(2)
-    with col1: st.download_button("Descargar excel de registros", eb, file_name=file_name, mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", use_container_width=True)
+    with col1: st.download_button("Descargar excel de registros", eb, file_name=file_name, mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", width='stretch')
     with col2: _validate_and_post(df_final, post_key)
 
 # Lógica de Scotiabank
