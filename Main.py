@@ -115,10 +115,11 @@ def select_code(key: str, default: str) -> tuple[str, str]:
         st.session_state[key] = default
     _, center, _ = st.columns([1, 8, 1])
     with center:
-        b1, b2, b3 = st.columns(3, gap="small")
+        b1, b2, b3, b4 = st.columns(4, gap="small")
         if b1.button("R001\nDOCUMENTO ERRADO", key=f"{key}_r001"): st.session_state[key] = "R001"
         if b2.button("R002\nCUENTA INVALIDA", key=f"{key}_r002"): st.session_state[key] = "R002"
         if b3.button("R007\nRECHAZO POR CCI", key=f"{key}_r007"): st.session_state[key] = "R007"
+        if b4.button("R017\nCUENTA DE AFP / CTS", key=f"{key}_r017"): st.session_state[key] = "R017"
     code = st.session_state[key]
     desc = CODE_DESC.get(code, "CUENTA INVALIDA")
     st.write("Código de rechazo seleccionado:", f"**{code} – {desc}**")
